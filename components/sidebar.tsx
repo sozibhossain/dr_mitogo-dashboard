@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import Link from "next/link"
-import { usePathname } from "next/navigation"
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Users,
@@ -15,8 +15,9 @@ import {
   BarChart3,
   Shield,
   CheckCircle,
-} from "lucide-react"
-import { cn } from "@/lib/utils"
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import Image from "next/image";
 
 const navigation = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -31,29 +32,29 @@ const navigation = [
   { href: "/support", label: "Support Tickets", icon: Ticket },
   { href: "/ads", label: "Ad Campaigns", icon: BarChart3 },
   { href: "/security", label: "Security", icon: Shield },
-]
+];
 
 export default function Sidebar() {
-  const pathname = usePathname()
+  const pathname = usePathname();
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-white border-r border-border overflow-y-auto shadow-md">
-      <div className="p-6 border-b border-border">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center text-white font-bold text-base shadow-lg">
-            CR
-          </div>
-          <div>
-            <h1 className="font-bold text-lg text-foreground">Casa Rancha</h1>
-            <p className="text-xs text-muted-foreground">Admin Panel</p>
-          </div>
+      <div className="p-2 border-b border-border">
+        <div className="flex justify-center items-center">
+          <Image
+            src="/logo-mitago.png"
+            alt="Logo"
+            width={100}
+            height={100}
+            className="w-24 h-24"
+          />
         </div>
       </div>
 
       <nav className="px-3 py-6 space-y-2">
         {navigation.map((item) => {
-          const Icon = item.icon
-          const isActive = pathname === item.href
+          const Icon = item.icon;
+          const isActive = pathname === item.href;
           return (
             <Link
               key={item.href}
@@ -62,15 +63,15 @@ export default function Sidebar() {
                 "flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 font-medium text-sm",
                 isActive
                   ? "bg-primary text-primary-foreground shadow-md scale-[1.02]"
-                  : "text-foreground hover:bg-secondary/80 hover:text-primary",
+                  : "text-foreground hover:bg-secondary/80 hover:text-primary"
               )}
             >
               <Icon className="w-5 h-5" />
               <span>{item.label}</span>
             </Link>
-          )
+          );
         })}
       </nav>
     </aside>
-  )
+  );
 }
