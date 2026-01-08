@@ -61,8 +61,7 @@ export default function UsersPage() {
       ]),
     ]
       .map((row) => row.join(","))
-      .join("
-")
+      .join("\n")
 
     const blob = new Blob([csv], { type: "text/csv" })
     const url = window.URL.createObjectURL(blob)
