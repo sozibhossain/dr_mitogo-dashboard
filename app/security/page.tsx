@@ -1,29 +1,27 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Skeleton } from "@/components/skeleton"
+import { useQuery } from "@tanstack/react-query"
 import { getSecuritySummary } from "@/lib/api"
 import { toast } from "sonner"
 import { Shield, Lock, AlertTriangle, Activity } from "lucide-react"
 
 export default function SecurityPage() {
-  const [summary, setSummary] = useState({
+  const summaryQuery = useQuery({
+    queryKey: ["security-summary"],
+    queryFn: getSecuritySummary,
+  })
+
+  const summary = summaryQuery.data || {
     sslStatus: "unknown",
     sslValidUntil: null as string | null,
     rateLimitStatus: "unknown",
     twoFaAdoptionPercent: 0,
     failedLogins24h: 0,
-  })
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    getSecuritySummary()
-      .then(setSummary)
-      .catch((error) => toast.error(error.message || "Failed to load security summary"))
-      .finally(() => setLoading(false))
-  }, [])
+  }
 
   const statusColor = (status: string, positive = "green") => {
     if (status === "active" || status === "normal" || status === "enabled") {
@@ -44,49 +42,49 @@ export default function SecurityPage() {
       <Header title="Security" description="Platform security settings and monitoring" />
 
       <div className="p-8 space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Shield className="w-4 h-4" />
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Shield className="h-4 w-4" />
                 SSL Status
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className={`text-2xl font-bold ${statusColor(sslStatus)}`}>
-                {loading ? "Loading" : summary.sslStatus}
+                {summaryQuery.isLoading ? <Skeleton className="h-7 w-20" /> : summary.sslStatus}
               </p>
-              <p className="text-xs text-muted-foreground mt-1">Valid until {formatDate(summary.sslValidUntil)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Valid until {formatDate(summary.sslValidUntil)}</p>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Activity className="w-4 h-4" />
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Activity className="h-4 w-4" />
                 API Rate Limit
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className={`text-2xl font-bold ${statusColor(rateStatus)}`}>
-                {loading ? "Loading" : summary.rateLimitStatus}
+                {summaryQuery.isLoading ? <Skeleton className="h-7 w-24" /> : summary.rateLimitStatus}
               </p>
-              <p className="text-xs text-muted-foreground mt-1">Status from last 24 hours</p>
+              <p className="mt-1 text-xs text-muted-foreground">Status from last 24 hours</p>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Lock className="w-4 h-4" />
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Lock className="h-4 w-4" />
                 2FA Enabled
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className={`text-2xl font-bold ${statusColor("enabled", "blue")}`}>
-                {loading ? "Loading" : "Enabled"}
+                {summaryQuery.isLoading ? <Skeleton className="h-7 w-16" /> : "Enabled"}
               </p>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="mt-1 text-xs text-muted-foreground">
                 {summary.twoFaAdoptionPercent.toFixed(1)}% user adoption
               </p>
             </CardContent>
@@ -94,14 +92,16 @@ export default function SecurityPage() {
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4" />
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <AlertTriangle className="h-4 w-4" />
                 Failed Logins
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-bold text-yellow-600">{summary.failedLogins24h}</p>
-              <p className="text-xs text-muted-foreground mt-1">Last 24 hours</p>
+              <p className="text-2xl font-bold text-yellow-600">
+                {summaryQuery.isLoading ? <Skeleton className="h-7 w-10" /> : summary.failedLogins24h}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Last 24 hours</p>
             </CardContent>
           </Card>
         </div>

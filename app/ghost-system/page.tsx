@@ -1,9 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
-import { TableSkeleton } from "@/components/skeleton"
+import { Skeleton, TableSkeleton } from "@/components/skeleton"
 import { getGhostPosts, getGhostSummary, getGhostInsights, getGhostNames, updateGhostNameStatus } from "@/lib/api"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { toast } from "sonner"
@@ -16,68 +17,73 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+type GhostPostsResponse = Awaited<ReturnType<typeof getGhostPosts>>
+type GhostNamesResponse = Awaited<ReturnType<typeof getGhostNames>>
+
 export default function GhostSystemPage() {
-  const [posts, setPosts] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
-  const [total, setTotal] = useState(0)
-  const [summary, setSummary] = useState({
-    totalGhostPosts: 0,
-    activeThisHour: 0,
-    avgEngagement: 0,
-  })
-  const [insights, setInsights] = useState<any | null>(null)
-  const [ghostNames, setGhostNames] = useState<any[]>([])
-  const [updatingName, setUpdatingName] = useState<string | null>(null)
   const [selectedPost, setSelectedPost] = useState<any | null>(null)
 
   const pageSize = 10
 
-  useEffect(() => {
-    getGhostSummary()
-      .then(setSummary)
-      .catch((error) => toast.error(error.message || "Failed to load summary"))
-  }, [])
+  const summaryQuery = useQuery({
+    queryKey: ["ghost-summary"],
+    queryFn: getGhostSummary,
+  })
 
-  useEffect(() => {
-    getGhostInsights()
-      .then(setInsights)
-      .catch((error) => toast.error(error.message || "Failed to load ghost insights"))
-    getGhostNames()
-      .then(setGhostNames)
-      .catch((error) => toast.error(error.message || "Failed to load ghost names"))
-  }, [])
+  const insightsQuery = useQuery({
+    queryKey: ["ghost-insights"],
+    queryFn: getGhostInsights,
+  })
 
-  useEffect(() => {
-    setLoading(true)
-    getGhostPosts(page, pageSize)
-      .then((data) => {
-        setPosts(data.posts)
-        setTotal(data.total)
-      })
-      .catch((error) => toast.error(error.message || "Failed to load ghost posts"))
-      .finally(() => setLoading(false))
-  }, [page])
+  const ghostNamesQuery = useQuery<GhostNamesResponse>({
+    queryKey: ["ghost-names"],
+    queryFn: getGhostNames,
+  })
 
-  const totalPages = Math.ceil(total / pageSize)
+  const postsQuery = useQuery<GhostPostsResponse>({
+    queryKey: ["ghost-posts", { page, pageSize }],
+    queryFn: () => getGhostPosts(page, pageSize),
+    keepPreviousData: true,
+  })
 
-  const handleGhostNameStatus = async (name: string, status: "available" | "reserved" | "restricted") => {
-    setUpdatingName(name)
-    try {
-      await updateGhostNameStatus(name, status)
-      setGhostNames((prev) =>
-        prev.map((entry) =>
-          entry.name === name
-            ? { ...entry, status, restricted: status === "restricted", reserved: status === "reserved" }
+  const nameMutation = useMutation({
+    mutationFn: ({ name, status }: { name: string; status: "available" | "reserved" | "restricted" }) =>
+      updateGhostNameStatus(name, status),
+    onSuccess: (_, variables) => {
+      toast.success(`Ghost name marked as ${variables.status}`)
+      queryClient.setQueriesData<GhostNamesResponse>({ queryKey: ["ghost-names"] }, (existing) => {
+        if (!existing) return existing
+        return existing.map((entry) =>
+          entry.name === variables.name
+            ? { ...entry, status: variables.status, restricted: variables.status === "restricted", reserved: variables.status === "reserved" }
             : entry
         )
-      )
-      toast.success(`Ghost name marked as ${status}`)
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update ghost name")
-    } finally {
-      setUpdatingName(null)
-    }
+      })
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to update ghost name"),
+  })
+
+  useEffect(() => {
+    setPage(1)
+  }, [])
+
+  const total = postsQuery.data?.total ?? 0
+  const totalPages = Math.ceil(total / pageSize)
+  const insights = insightsQuery.data
+  const summary = summaryQuery.data
+  const ghostNames = ghostNamesQuery.data ?? []
+  const posts = postsQuery.data?.posts ?? []
+
+  const paginationLabel = useMemo(
+    () =>
+      `Showing ${Math.min((page - 1) * pageSize + 1, total)} to ${Math.min(page * pageSize, total)} of ${total} posts`,
+    [page, pageSize, total]
+  )
+
+  const handleGhostNameStatus = (name: string, status: "available" | "reserved" | "restricted") => {
+    nameMutation.mutate({ name, status })
   }
 
   return (
@@ -85,72 +91,72 @@ export default function GhostSystemPage() {
       <Header title="Ghost System" description="Anonymous posts and ghost interactions" />
 
       <div className="p-8 space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white rounded-lg border border-border p-6">
-            <p className="text-sm text-muted-foreground">Total Ghost Posts</p>
-            <p className="text-3xl font-bold text-primary mt-2">{summary.totalGhostPosts.toLocaleString()}</p>
-          </div>
-          <div className="bg-white rounded-lg border border-border p-6">
-            <p className="text-sm text-muted-foreground">Active This Hour</p>
-            <p className="text-3xl font-bold text-primary mt-2">{summary.activeThisHour.toLocaleString()}</p>
-          </div>
-          <div className="bg-white rounded-lg border border-border p-6">
-            <p className="text-sm text-muted-foreground">Avg Engagement</p>
-            <p className="text-3xl font-bold text-primary mt-2">{summary.avgEngagement.toLocaleString()}</p>
-          </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {["totalGhostPosts", "activeThisHour", "avgEngagement"].map((key) => (
+            <div key={key} className="rounded-lg border border-border bg-white p-6">
+              <p className="text-sm text-muted-foreground">
+                {key === "totalGhostPosts" ? "Total Ghost Posts" : key === "activeThisHour" ? "Active This Hour" : "Avg Engagement"}
+              </p>
+              <p className="mt-2 text-3xl font-bold text-primary">
+                {summaryQuery.isLoading ? <Skeleton className="h-8 w-20" /> : Number((summary as any)?.[key] ?? 0).toLocaleString()}
+              </p>
+            </div>
+          ))}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="bg-white rounded-lg border border-border p-6 space-y-3">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="space-y-3 rounded-lg border border-border bg-white p-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-foreground">Content Breakdown</h3>
               <p className="text-xs text-muted-foreground">Last pull</p>
             </div>
             <div className="grid grid-cols-2 gap-4 text-sm">
-              <div className="p-3 bg-secondary/50 rounded-lg">
-                <p className="text-muted-foreground">Words only</p>
-                <p className="text-2xl font-bold text-primary">
-                  {insights ? insights.breakdown.textPosts.toLocaleString() : "-"}
-                </p>
-              </div>
-              <div className="p-3 bg-secondary/50 rounded-lg">
-                <p className="text-muted-foreground">Images</p>
-                <p className="text-2xl font-bold text-primary">
-                  {insights ? insights.breakdown.imagePosts.toLocaleString() : "-"}
-                </p>
-              </div>
-              <div className="p-3 bg-secondary/50 rounded-lg">
-                <p className="text-muted-foreground">Videos</p>
-                <p className="text-2xl font-bold text-primary">
-                  {insights ? insights.breakdown.videoPosts.toLocaleString() : "-"}
-                </p>
-              </div>
-              <div className="p-3 bg-secondary/50 rounded-lg">
-                <p className="text-muted-foreground">Audio/Music</p>
-                <p className="text-2xl font-bold text-primary">
-                  {insights ? insights.breakdown.audioPosts.toLocaleString() : "-"}
-                </p>
-              </div>
+              {["textPosts", "imagePosts", "videoPosts", "audioPosts"].map((metric) => (
+                <div key={metric} className="rounded-lg bg-secondary/50 p-3">
+                  <p className="text-muted-foreground">
+                    {metric === "textPosts"
+                      ? "Words only"
+                      : metric === "imagePosts"
+                        ? "Images"
+                        : metric === "videoPosts"
+                          ? "Videos"
+                          : "Audio/Music"}
+                  </p>
+                  <p className="text-2xl font-bold text-primary">
+                    {insightsQuery.isLoading ? (
+                      <Skeleton className="mt-1 h-7 w-14" />
+                    ) : (
+                      insights?.breakdown?.[metric]?.toLocaleString() ?? "-"
+                    )}
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
 
-          <div className="bg-white rounded-lg border border-border p-6 space-y-3">
+          <div className="space-y-3 rounded-lg border border-border bg-white p-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-foreground">Flagged Ghost Posts</h3>
               <p className="text-xs text-muted-foreground">Auto-hide after 3+ reports</p>
             </div>
-            {!insights || insights.flagged.length === 0 ? (
+            {insightsQuery.isLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, idx) => (
+                  <Skeleton key={idx} className="h-16 w-full" />
+                ))}
+              </div>
+            ) : !insights || insights.flagged.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nothing flagged right now.</p>
             ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+              <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
                 {insights.flagged.map((item: any) => (
-                  <div key={item.id} className="p-3 bg-secondary/40 rounded-lg">
+                  <div key={item.id} className="rounded-lg bg-secondary/40 p-3">
                     <p className="text-sm text-foreground line-clamp-2">{item.contentPreview || "No preview"}</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {item.reportCount} reports · {item.ghostName || "Ghost"}
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {item.reportCount} reports Жњ {item.ghostName || "Ghost"}
                     </p>
                     {item.reasons?.length ? (
-                      <p className="text-xs text-muted-foreground mt-1">Reasons: {item.reasons.join(", ")}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">Reasons: {item.reasons.join(", ")}</p>
                     ) : null}
                   </div>
                 ))}
@@ -159,8 +165,8 @@ export default function GhostSystemPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg border border-border p-6">
-          <div className="flex items-center justify-between mb-3">
+        <div className="rounded-lg border border-border bg-white p-6">
+          <div className="mb-3 flex items-center justify-between">
             <h3 className="text-lg font-bold text-foreground">Ghost Names</h3>
             <p className="text-xs text-muted-foreground">Reserve or restrict names from assignment</p>
           </div>
@@ -177,9 +183,15 @@ export default function GhostSystemPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {ghostNames.length === 0 ? (
+                {ghostNamesQuery.isLoading ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-4 text-muted-foreground text-sm">
+                    <td colSpan={6} className="px-4 py-4">
+                      <TableSkeleton rows={3} />
+                    </td>
+                  </tr>
+                ) : ghostNames.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-4 text-sm text-muted-foreground">
                       No ghost names found.
                     </td>
                   </tr>
@@ -192,12 +204,12 @@ export default function GhostSystemPage() {
                       <td className="px-4 py-3 text-muted-foreground">{entry.work || "-"}</td>
                       <td className="px-4 py-3 text-muted-foreground capitalize">{entry.status}</td>
                       <td className="px-4 py-3">
-                        <div className="flex gap-2 flex-wrap">
+                        <div className="flex flex-wrap gap-2">
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => handleGhostNameStatus(entry.name, "restricted")}
-                            disabled={updatingName === entry.name}
+                            disabled={nameMutation.isPending}
                           >
                             Restrict
                           </Button>
@@ -205,7 +217,7 @@ export default function GhostSystemPage() {
                             size="sm"
                             variant="outline"
                             onClick={() => handleGhostNameStatus(entry.name, "reserved")}
-                            disabled={updatingName === entry.name}
+                            disabled={nameMutation.isPending}
                           >
                             Reserve
                           </Button>
@@ -213,7 +225,7 @@ export default function GhostSystemPage() {
                             size="sm"
                             variant="ghost"
                             onClick={() => handleGhostNameStatus(entry.name, "available")}
-                            disabled={updatingName === entry.name}
+                            disabled={nameMutation.isPending}
                           >
                             Allow
                           </Button>
@@ -227,10 +239,10 @@ export default function GhostSystemPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <div className="overflow-hidden rounded-lg border border-border bg-white">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-secondary/50 border-b border-border">
+              <thead className="border-b border-border bg-secondary/50">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Content</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Author</th>
@@ -241,7 +253,7 @@ export default function GhostSystemPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading ? (
+                {postsQuery.isLoading ? (
                   <tr>
                     <td colSpan={6} className="px-6 py-6">
                       <TableSkeleton />
@@ -255,7 +267,7 @@ export default function GhostSystemPage() {
                   </tr>
                 ) : (
                   posts.map((post: any) => (
-                    <tr key={post.id} className="hover:bg-secondary/30 transition-colors">
+                    <tr key={post.id} className="transition-colors hover:bg-secondary/30">
                       <td className="px-6 py-4 text-sm text-foreground max-w-xs truncate">{post.content}</td>
                       <td className="px-6 py-4 text-sm font-medium text-primary">{post.author}</td>
                       <td className="px-6 py-4 text-sm text-foreground">{post.likes}</td>
@@ -275,9 +287,7 @@ export default function GhostSystemPage() {
         </div>
 
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            Showing {Math.min((page - 1) * pageSize + 1, total)} to {Math.min(page * pageSize, total)} of {total} posts
-          </p>
+          <p className="text-sm text-muted-foreground">{paginationLabel}</p>
           <div className="flex gap-2">
             <Button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -285,7 +295,7 @@ export default function GhostSystemPage() {
               variant="outline"
               size="sm"
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ChevronLeft className="h-4 w-4" />
             </Button>
             {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
               const pageNum = page > 3 ? page + i - 2 : i + 1
@@ -306,7 +316,7 @@ export default function GhostSystemPage() {
               variant="outline"
               size="sm"
             >
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -322,7 +332,7 @@ export default function GhostSystemPage() {
             <div className="space-y-4 text-sm">
               <div>
                 <p className="text-muted-foreground">Content</p>
-                <p className="text-foreground mt-1">{selectedPost.content}</p>
+                <p className="mt-1 text-foreground">{selectedPost.content}</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

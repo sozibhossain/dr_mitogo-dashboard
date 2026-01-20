@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,18 +18,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+type GroupsResponse = Awaited<ReturnType<typeof getGroups>>
+
 export default function GroupsPage() {
-  const [groups, setGroups] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
-  const [total, setTotal] = useState(0)
   const [searchTerm, setSearchTerm] = useState("")
   const [manageOpen, setManageOpen] = useState(false)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [detail, setDetail] = useState<any | null>(null)
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -42,91 +39,99 @@ export default function GroupsPage() {
     setPage(1)
   }, [searchTerm])
 
-  useEffect(() => {
-    setLoading(true)
-    getGroups(page, pageSize, searchTerm)
-      .then((data) => {
-        setGroups(data.groups)
-        setTotal(data.total)
-      })
-      .catch((error) => toast.error(error.message || "Failed to load groups"))
-      .finally(() => setLoading(false))
-  }, [page, searchTerm])
+  const groupsQuery = useQuery<GroupsResponse>({
+    queryKey: ["groups", { page, pageSize, searchTerm }],
+    queryFn: () => getGroups(page, pageSize, searchTerm),
+    keepPreviousData: true,
+  })
 
+  const groups = groupsQuery.data?.groups ?? []
+  const total = groupsQuery.data?.total ?? 0
   const totalPages = Math.ceil(total / pageSize)
 
-  const openManage = async (groupId: string) => {
-    setManageOpen(true)
-    setSelectedGroupId(groupId)
-    setDetailLoading(true)
-    try {
-      const group = await getGroupDetails(groupId)
-      setDetail(group)
+  const detailQuery = useQuery({
+    queryKey: ["group-detail", selectedGroupId],
+    queryFn: () => getGroupDetails(selectedGroupId || ""),
+    enabled: !!selectedGroupId,
+  })
+
+  useEffect(() => {
+    if (detailQuery.data) {
+      const group = detailQuery.data
       setForm({
         name: group.name || "",
         description: group.description || "",
         visibility: group.visibility || "public",
         isVerified: !!group.isVerified,
       })
-    } catch (error: any) {
-      toast.error(error.message || "Failed to load group details")
-      setManageOpen(false)
-    } finally {
-      setDetailLoading(false)
     }
+  }, [detailQuery.data])
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: { id: string; data: any }) => updateGroup(payload.id, payload.data),
+    onSuccess: () => {
+      toast.success("Group updated")
+      queryClient.invalidateQueries({ queryKey: ["groups"] })
+      queryClient.invalidateQueries({ queryKey: ["group-detail", selectedGroupId || ""] })
+      closeManage()
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to update group"),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteGroup(id),
+    onSuccess: () => {
+      toast.success("Group deleted")
+      queryClient.invalidateQueries({ queryKey: ["groups"] })
+      closeManage()
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to delete group"),
+  })
+
+  const openManage = (groupId: string) => {
+    setManageOpen(true)
+    setSelectedGroupId(groupId)
   }
 
   const closeManage = () => {
     setManageOpen(false)
     setSelectedGroupId(null)
-    setDetail(null)
+    setForm({
+      name: "",
+      description: "",
+      visibility: "public",
+      isVerified: false,
+    })
   }
 
-  const handleSave = async () => {
+  const handleSave = () => {
     if (!selectedGroupId) return
     if (!form.name.trim()) {
       toast.error("Group name is required")
       return
     }
-    setSaving(true)
-    try {
-      await updateGroup(selectedGroupId, {
+    updateMutation.mutate({
+      id: selectedGroupId,
+      data: {
         name: form.name.trim(),
         description: form.description,
         visibility: form.visibility,
         isVerified: form.isVerified,
-      })
-      toast.success("Group updated")
-      await getGroups(page, pageSize, searchTerm).then((data) => {
-        setGroups(data.groups)
-        setTotal(data.total)
-      })
-      closeManage()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update group")
-    } finally {
-      setSaving(false)
-    }
+      },
+    })
   }
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!selectedGroupId) return
     if (!window.confirm("Delete this group?")) return
-    setDeleting(true)
-    try {
-      await deleteGroup(selectedGroupId)
-      toast.success("Group deleted")
-      await getGroups(page, pageSize, searchTerm).then((data) => {
-        setGroups(data.groups)
-        setTotal(data.total)
-      })
-      closeManage()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to delete group")
-    } finally {
-      setDeleting(false)
-    }
+    deleteMutation.mutate(selectedGroupId)
   }
+
+  const paginationLabel = useMemo(
+    () =>
+      `Showing ${Math.min((page - 1) * pageSize + 1, total)} to ${Math.min(page * pageSize, total)} of ${total} groups`,
+    [page, pageSize, total]
+  )
 
   return (
     <div>
@@ -135,9 +140,9 @@ export default function GroupsPage() {
       <div className="p-8 space-y-6">
         <div className="flex gap-4">
           <div className="flex-1">
-            <label className="text-sm font-medium text-foreground mb-2 block">Search Groups</label>
+            <label className="mb-2 block text-sm font-medium text-foreground">Search Groups</label>
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Search by name or description..."
                 value={searchTerm}
@@ -148,10 +153,10 @@ export default function GroupsPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <div className="overflow-hidden rounded-lg border border-border bg-white">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-secondary/50 border-b border-border">
+              <thead className="border-b border-border bg-secondary/50">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Name</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Description</th>
@@ -163,7 +168,7 @@ export default function GroupsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading ? (
+                {groupsQuery.isLoading ? (
                   <tr>
                     <td colSpan={7} className="px-6 py-6">
                       <TableSkeleton />
@@ -177,7 +182,7 @@ export default function GroupsPage() {
                   </tr>
                 ) : (
                   groups.map((group: any) => (
-                    <tr key={group.id} className="hover:bg-secondary/30 transition-colors">
+                    <tr key={group.id} className="transition-colors hover:bg-secondary/30">
                       <td className="px-6 py-4 text-sm font-medium text-foreground">{group.name}</td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">{group.description}</td>
                       <td className="px-6 py-4 text-sm text-foreground">{group.members.toLocaleString()}</td>
@@ -198,9 +203,7 @@ export default function GroupsPage() {
         </div>
 
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            Showing {Math.min((page - 1) * pageSize + 1, total)} to {Math.min(page * pageSize, total)} of {total} groups
-          </p>
+          <p className="text-sm text-muted-foreground">{paginationLabel}</p>
           <div className="flex gap-2">
             <Button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -208,7 +211,7 @@ export default function GroupsPage() {
               variant="outline"
               size="sm"
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ChevronLeft className="h-4 w-4" />
             </Button>
             {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
               const pageNum = page > 3 ? page + i - 2 : i + 1
@@ -229,7 +232,7 @@ export default function GroupsPage() {
               variant="outline"
               size="sm"
             >
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -242,51 +245,48 @@ export default function GroupsPage() {
             <DialogDescription>Review details and update group settings.</DialogDescription>
           </DialogHeader>
 
-          {detailLoading ? (
+          {detailQuery.isLoading ? (
             <div className="text-sm text-muted-foreground">Loading details...</div>
-          ) : detail ? (
+          ) : detailQuery.data ? (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <p className="text-muted-foreground">Members</p>
-                  <p className="font-medium text-foreground">{detail.members}</p>
+                  <p className="font-medium text-foreground">{detailQuery.data.members}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Posts</p>
-                  <p className="font-medium text-foreground">{detail.posts}</p>
+                  <p className="font-medium text-foreground">{detailQuery.data.posts}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Created</p>
-                  <p className="font-medium text-foreground">{detail.createdAt}</p>
+                  <p className="font-medium text-foreground">{detailQuery.data.createdAt}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Updated</p>
-                  <p className="font-medium text-foreground">{detail.updatedAt}</p>
+                  <p className="font-medium text-foreground">{detailQuery.data.updatedAt}</p>
                 </div>
               </div>
 
               <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">Name</label>
-                <Input
-                  value={form.name}
-                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                />
+                <label className="mb-2 block text-sm font-medium text-foreground">Name</label>
+                <Input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} />
               </div>
               <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">Description</label>
+                <label className="mb-2 block text-sm font-medium text-foreground">Description</label>
                 <textarea
                   value={form.description}
                   onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                  className="w-full px-4 py-2 border border-border rounded-lg text-sm min-h-24"
+                  className="min-h-24 w-full rounded-lg border border-border px-4 py-2 text-sm"
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-2 block">Visibility</label>
+                  <label className="mb-2 block text-sm font-medium text-foreground">Visibility</label>
                   <select
                     value={form.visibility}
                     onChange={(event) => setForm((prev) => ({ ...prev, visibility: event.target.value }))}
-                    className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                    className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                   >
                     <option value="public">Public</option>
                     <option value="private">Private</option>
@@ -294,13 +294,11 @@ export default function GroupsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-2 block">Verified</label>
+                  <label className="mb-2 block text-sm font-medium text-foreground">Verified</label>
                   <select
                     value={form.isVerified ? "yes" : "no"}
-                    onChange={(event) =>
-                      setForm((prev) => ({ ...prev, isVerified: event.target.value === "yes" }))
-                    }
-                    className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                    onChange={(event) => setForm((prev) => ({ ...prev, isVerified: event.target.value === "yes" }))}
+                    className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                   >
                     <option value="yes">Yes</option>
                     <option value="no">No</option>
@@ -316,11 +314,11 @@ export default function GroupsPage() {
             <Button variant="outline" onClick={closeManage}>
               Close
             </Button>
-            <Button variant="outline" onClick={handleDelete} disabled={deleting}>
-              {deleting ? "Deleting..." : "Delete"}
+            <Button variant="outline" onClick={handleDelete} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
             </Button>
-            <Button onClick={handleSave} disabled={saving || detailLoading}>
-              {saving ? "Saving..." : "Save Changes"}
+            <Button onClick={handleSave} disabled={updateMutation.isPending || detailQuery.isLoading}>
+              {updateMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

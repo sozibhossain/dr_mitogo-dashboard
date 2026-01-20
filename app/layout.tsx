@@ -2,7 +2,6 @@ import type React from "react"
 import type { Metadata } from "next"
 import { Geist } from "next/font/google"
 import "./globals.css"
-import { Toaster } from "sonner"
 import Providers from "./providers"
 import AppShell from "@/components/app-shell"
 
@@ -11,7 +10,7 @@ const geist = Geist({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "Casa Rancha Admin Dashboard",
   description: "Manage your Casa Rancha platform",
-  generator: "v0.app",
+  generator: "Rancha Admin Dashboard",
 }
 
 export default function RootLayout({
@@ -25,7 +24,6 @@ export default function RootLayout({
         <Providers>
           <AppShell>{children}</AppShell>
         </Providers>
-        <Toaster position="top-right" richColors />
       </body>
     </html>
   )

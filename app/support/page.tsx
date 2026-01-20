@@ -1,8 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
+import { TableSkeleton } from "@/components/skeleton"
 import { getSupportTickets, updateSupportTicketStatus } from "@/lib/api"
 import { toast } from "sonner"
 import { MessageSquare, CheckCircle, Clock } from "lucide-react"
@@ -15,40 +17,39 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+type TicketsResponse = Awaited<ReturnType<typeof getSupportTickets>>
+
 export default function SupportPage() {
-  const [tickets, setTickets] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
-  const [total, setTotal] = useState(0)
   const [selectedTicket, setSelectedTicket] = useState<any | null>(null)
-  const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ status: "open", priority: "medium" })
 
   const pageSize = 10
 
-  const loadTickets = () => {
-    setLoading(true)
-    getSupportTickets(page, pageSize)
-      .then((data) => {
-        setTickets(data.tickets)
-        setTotal(data.total)
-      })
-      .catch((error) => toast.error(error.message || "Failed to load tickets"))
-      .finally(() => setLoading(false))
-  }
+  const ticketsQuery = useQuery<TicketsResponse>({
+    queryKey: ["support-tickets", { page, pageSize }],
+    queryFn: () => getSupportTickets(page, pageSize),
+    keepPreviousData: true,
+  })
 
-  useEffect(() => {
-    loadTickets()
-  }, [page])
+  const tickets = ticketsQuery.data?.tickets ?? []
+  const total = ticketsQuery.data?.total ?? 0
+  const totalPages = Math.ceil(total / pageSize)
 
-  const handleResolve = async (id: string) => {
-    try {
-      await updateSupportTicketStatus({ ticketId: id, status: "resolved" })
-      toast.success("Ticket resolved")
-      loadTickets()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update ticket")
-    }
+  const updateMutation = useMutation({
+    mutationFn: (payload: { id: string; status?: string; priority?: string }) =>
+      updateSupportTicketStatus({ ticketId: payload.id, status: payload.status, priority: payload.priority }),
+    onSuccess: () => {
+      toast.success("Ticket updated")
+      queryClient.invalidateQueries({ queryKey: ["support-tickets"] })
+      setSelectedTicket(null)
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to update ticket"),
+  })
+
+  const handleResolve = (id: string) => {
+    updateMutation.mutate({ id, status: "resolved" })
   }
 
   const openDetails = (ticket: any) => {
@@ -59,23 +60,9 @@ export default function SupportPage() {
     })
   }
 
-  const handleSave = async () => {
+  const handleSave = () => {
     if (!selectedTicket) return
-    setSaving(true)
-    try {
-      await updateSupportTicketStatus({
-        ticketId: selectedTicket.id,
-        status: form.status,
-        priority: form.priority,
-      })
-      toast.success("Ticket updated")
-      setSelectedTicket(null)
-      loadTickets()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update ticket")
-    } finally {
-      setSaving(false)
-    }
+    updateMutation.mutate({ id: selectedTicket.id, status: form.status, priority: form.priority })
   }
 
   const getPriorityColor = (priority: string) => {
@@ -94,30 +81,33 @@ export default function SupportPage() {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "open":
-        return <MessageSquare className="w-4 h-4 mr-1" />
+        return <MessageSquare className="mr-1 h-4 w-4" />
       case "in_progress":
-        return <Clock className="w-4 h-4 mr-1" />
+        return <Clock className="mr-1 h-4 w-4" />
       case "resolved":
-        return <CheckCircle className="w-4 h-4 mr-1" />
+        return <CheckCircle className="mr-1 h-4 w-4" />
       default:
         return null
     }
   }
 
-  const formatStatus = (status: string) =>
-    status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  const formatStatus = (status: string) => status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
 
-  const totalPages = Math.ceil(total / pageSize)
+  const paginationLabel = useMemo(
+    () =>
+      `Showing ${Math.min((page - 1) * pageSize + 1, total)} to ${Math.min(page * pageSize, total)} of ${total} tickets`,
+    [page, pageSize, total]
+  )
 
   return (
     <div>
       <Header title="Support Tickets" description="Manage customer support requests" />
 
       <div className="p-8 space-y-6">
-        <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <div className="overflow-hidden rounded-lg border border-border bg-white">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-secondary/50 border-b border-border">
+              <thead className="border-b border-border bg-secondary/50">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Subject</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">User</th>
@@ -128,10 +118,10 @@ export default function SupportPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading ? (
+                {ticketsQuery.isLoading ? (
                   <tr>
                     <td colSpan={6} className="px-6 py-6">
-                      <div className="text-sm text-muted-foreground">Loading tickets...</div>
+                      <TableSkeleton />
                     </td>
                   </tr>
                 ) : tickets.length === 0 ? (
@@ -142,7 +132,7 @@ export default function SupportPage() {
                   </tr>
                 ) : (
                   tickets.map((ticket: any) => (
-                    <tr key={ticket.id} className="hover:bg-secondary/30 transition-colors">
+                    <tr key={ticket.id} className="transition-colors hover:bg-secondary/30">
                       <td className="px-6 py-4 text-sm font-medium text-foreground">{ticket.subject}</td>
                       <td className="px-6 py-4 text-sm text-primary">{ticket.user}</td>
                       <td className="px-6 py-4 text-sm">
@@ -152,18 +142,16 @@ export default function SupportPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-sm">
-                        <span
-                          className={`px-3 py-1 rounded-full text-xs font-medium ${getPriorityColor(ticket.priority)}`}
-                        >
+                        <span className={`rounded-full px-3 py-1 text-xs font-medium ${getPriorityColor(ticket.priority)}`}>
                           {ticket.priority.charAt(0).toUpperCase() + ticket.priority.slice(1)}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">{ticket.createdAt}</td>
-                      <td className="px-6 py-4 text-sm flex gap-2">
+                      <td className="flex gap-2 px-6 py-4 text-sm">
                         <Button size="sm" variant="ghost" onClick={() => openDetails(ticket)}>
                           View
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => handleResolve(ticket.id)}>
+                        <Button size="sm" variant="ghost" onClick={() => handleResolve(ticket.id)} disabled={updateMutation.isPending}>
                           Resolve
                         </Button>
                       </td>
@@ -176,9 +164,7 @@ export default function SupportPage() {
         </div>
 
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            Showing {Math.min((page - 1) * pageSize + 1, total)} to {Math.min(page * pageSize, total)} of {total} tickets
-          </p>
+          <p className="text-sm text-muted-foreground">{paginationLabel}</p>
           <div className="flex gap-2">
             <Button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -189,7 +175,7 @@ export default function SupportPage() {
               Prev
             </Button>
             <Button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() => setPage((p) => Math.min(totalPages || 1, p + 1))}
               disabled={page === totalPages || totalPages === 0}
               variant="outline"
               size="sm"
@@ -219,7 +205,7 @@ export default function SupportPage() {
               {selectedTicket.description ? (
                 <div>
                   <p className="text-muted-foreground">Description</p>
-                  <p className="font-medium text-foreground whitespace-pre-wrap">{selectedTicket.description}</p>
+                  <p className="whitespace-pre-wrap font-medium text-foreground">{selectedTicket.description}</p>
                 </div>
               ) : null}
               {selectedTicket.attachments?.length ? (
@@ -227,7 +213,7 @@ export default function SupportPage() {
                   <p className="text-muted-foreground">Attachments</p>
                   <div className="space-y-1">
                     {selectedTicket.attachments.map((file: string, idx: number) => (
-                      <a key={idx} href={file} target="_blank" rel="noreferrer" className="text-primary underline text-xs">
+                      <a key={idx} href={file} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
                         Attachment {idx + 1}
                       </a>
                     ))}
@@ -236,11 +222,11 @@ export default function SupportPage() {
               ) : null}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-2 block">Status</label>
+                  <label className="mb-2 block text-sm font-medium text-foreground">Status</label>
                   <select
                     value={form.status}
                     onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value }))}
-                    className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                    className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                   >
                     <option value="open">Open</option>
                     <option value="in_progress">In Progress</option>
@@ -249,11 +235,11 @@ export default function SupportPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-2 block">Priority</label>
+                  <label className="mb-2 block text-sm font-medium text-foreground">Priority</label>
                   <select
                     value={form.priority}
                     onChange={(event) => setForm((prev) => ({ ...prev, priority: event.target.value }))}
-                    className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                    className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                   >
                     <option value="low">Low</option>
                     <option value="medium">Medium</option>
@@ -267,8 +253,8 @@ export default function SupportPage() {
             <Button variant="outline" onClick={() => setSelectedTicket(null)}>
               Close
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Saving..." : "Save Changes"}
+            <Button onClick={handleSave} disabled={updateMutation.isPending}>
+              {updateMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

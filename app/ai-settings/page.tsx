@@ -1,9 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/skeleton"
 import { getAICampaigns, createAICampaign, updateAICampaignStatus, deleteAICampaign } from "@/lib/api"
 import { toast } from "sonner"
 import { Play, Pause, Trash2 } from "lucide-react"
@@ -21,69 +23,70 @@ const getTypeLabel = (type: string) => {
   }
 }
 
+type CampaignsResponse = Awaited<ReturnType<typeof getAICampaigns>>
+
 export default function AISettingsPage() {
-  const [campaigns, setCampaigns] = useState<any[]>([])
+  const queryClient = useQueryClient()
   const [campaignName, setCampaignName] = useState("")
   const [campaignType, setCampaignType] = useState("engagement")
-  const [loading, setLoading] = useState(true)
-  const [creating, setCreating] = useState(false)
 
-  const loadCampaigns = () => {
-    setLoading(true)
-    return getAICampaigns()
-      .then(setCampaigns)
-      .catch((error) => toast.error(error.message || "Failed to load campaigns"))
-      .finally(() => setLoading(false))
-  }
+  const campaignsQuery = useQuery<CampaignsResponse>({
+    queryKey: ["ai-campaigns"],
+    queryFn: getAICampaigns,
+  })
 
-  useEffect(() => {
-    loadCampaigns()
-  }, [])
+  const createMutation = useMutation({
+    mutationFn: () =>
+      createAICampaign({
+        name: campaignName.trim(),
+        type: campaignType as any,
+        status: "active",
+      }),
+    onSuccess: () => {
+      toast.success("Campaign created successfully")
+      setCampaignName("")
+      queryClient.invalidateQueries({ queryKey: ["ai-campaigns"] })
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to create campaign"),
+  })
 
-  const handleCreateCampaign = async () => {
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) => updateAICampaignStatus(id, status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ai-campaigns"] })
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to update campaign"),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (campaignId: string) => deleteAICampaign(campaignId),
+    onSuccess: () => {
+      toast.success("Campaign deleted")
+      queryClient.invalidateQueries({ queryKey: ["ai-campaigns"] })
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to delete campaign"),
+  })
+
+  const handleCreateCampaign = () => {
     if (!campaignName.trim()) {
       toast.error("Please enter a campaign name")
       return
     }
-
-    setCreating(true)
-    try {
-      await createAICampaign({
-        name: campaignName.trim(),
-        type: campaignType as any,
-        status: "active",
-      })
-      toast.success("Campaign created successfully")
-      setCampaignName("")
-      await loadCampaigns()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to create campaign")
-    } finally {
-      setCreating(false)
-    }
+    createMutation.mutate()
   }
 
-  const handleToggleStatus = async (campaign: any) => {
+  const handleToggleStatus = (campaign: any) => {
     const nextStatus = campaign.status === "active" ? "paused" : "active"
-    try {
-      await updateAICampaignStatus(campaign.id, nextStatus)
-      toast.success(`Campaign ${nextStatus === "active" ? "started" : "paused"}`)
-      await loadCampaigns()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update campaign")
-    }
+    statusMutation.mutate({ id: campaign.id, status: nextStatus })
   }
 
-  const handleDelete = async (campaignId: string) => {
+  const handleDelete = (campaignId: string) => {
     if (!window.confirm("Delete this campaign?")) return
-    try {
-      await deleteAICampaign(campaignId)
-      toast.success("Campaign deleted")
-      await loadCampaigns()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to delete campaign")
-    }
+    deleteMutation.mutate(campaignId)
   }
+
+  const campaigns = campaignsQuery.data ?? []
+  const loadingCampaigns = campaignsQuery.isLoading || campaignsQuery.isFetching
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -103,11 +106,11 @@ export default function AISettingsPage() {
       <Header title="AI & Automation" description="Manage AI campaigns and automation settings" />
 
       <div className="p-8 space-y-6">
-        <div className="bg-white rounded-lg border border-border p-6">
-          <h2 className="text-lg font-bold text-foreground mb-4">Create New Campaign</h2>
+        <div className="rounded-lg border border-border bg-white p-6">
+          <h2 className="mb-4 text-lg font-bold text-foreground">Create New Campaign</h2>
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Campaign Name</label>
+              <label className="mb-2 block text-sm font-medium text-foreground">Campaign Name</label>
               <Input
                 placeholder="e.g., Summer Engagement Boost"
                 value={campaignName}
@@ -115,45 +118,60 @@ export default function AISettingsPage() {
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Campaign Type</label>
+              <label className="mb-2 block text-sm font-medium text-foreground">Campaign Type</label>
               <select
                 value={campaignType}
                 onChange={(e) => setCampaignType(e.target.value)}
-                className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                className="w-full rounded-lg border border-border px-4 py-2 text-sm"
               >
                 <option value="engagement">Engagement Booster</option>
                 <option value="posts">Content Seeding</option>
                 <option value="comments">Comment Catalyst</option>
               </select>
             </div>
-            <Button onClick={handleCreateCampaign} disabled={creating} className="w-full">
-              {creating ? "Creating..." : "Create Campaign"}
+            <Button onClick={handleCreateCampaign} disabled={createMutation.isPending} className="w-full">
+              {createMutation.isPending ? "Creating..." : "Create Campaign"}
             </Button>
           </div>
         </div>
 
         <div className="space-y-4">
           <h2 className="text-lg font-bold text-foreground">Active Campaigns</h2>
-          {loading ? (
-            <div className="text-sm text-muted-foreground">Loading campaigns...</div>
+          {loadingCampaigns ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, idx) => (
+                <div key={idx} className="rounded-lg border border-border bg-white p-6">
+                  <Skeleton className="h-5 w-48" />
+                  <Skeleton className="mt-2 h-4 w-64" />
+                  <div className="mt-4 grid grid-cols-2 gap-4">
+                    <Skeleton className="h-8 w-full" />
+                    <Skeleton className="h-8 w-full" />
+                  </div>
+                  <div className="mt-4 flex gap-2">
+                    <Skeleton className="h-9 w-24" />
+                    <Skeleton className="h-9 w-20" />
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : campaigns.length === 0 ? (
             <div className="text-sm text-muted-foreground">No campaigns yet.</div>
           ) : (
             campaigns.map((campaign: any) => (
-              <div key={campaign.id} className="bg-white rounded-lg border border-border p-6">
-                <div className="flex items-start justify-between mb-4">
+              <div key={campaign.id} className="rounded-lg border border-border bg-white p-6">
+                <div className="mb-4 flex items-start justify-between">
                   <div>
                     <h3 className="text-base font-bold text-foreground">{campaign.name}</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
+                    <p className="mt-1 text-sm text-muted-foreground">
                       Type: {getTypeLabel(campaign.type)} | Started {campaign.startedAt}
                     </p>
                   </div>
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(campaign.status)}`}>
+                  <span className={`rounded-full px-3 py-1 text-xs font-medium ${getStatusColor(campaign.status)}`}>
                     {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="mb-4 grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm text-muted-foreground">Interactions</p>
                     <p className="text-2xl font-bold text-primary">{campaign.interactions.toLocaleString()}</p>
@@ -165,16 +183,16 @@ export default function AISettingsPage() {
                 </div>
 
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => handleToggleStatus(campaign)}>
+                  <Button variant="outline" size="sm" onClick={() => handleToggleStatus(campaign)} disabled={statusMutation.isPending}>
                     {campaign.status === "active" ? (
-                      <Pause className="w-4 h-4 mr-1" />
+                      <Pause className="mr-1 h-4 w-4" />
                     ) : (
-                      <Play className="w-4 h-4 mr-1" />
+                      <Play className="mr-1 h-4 w-4" />
                     )}
                     {campaign.status === "active" ? "Pause" : "Start"}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleDelete(campaign.id)}>
-                    <Trash2 className="w-4 h-4 mr-1" />
+                  <Button variant="outline" size="sm" onClick={() => handleDelete(campaign.id)} disabled={deleteMutation.isPending}>
+                    <Trash2 className="mr-1 h-4 w-4" />
                     Delete
                   </Button>
                 </div>

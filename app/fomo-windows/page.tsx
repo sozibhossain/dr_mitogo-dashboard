@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import {
@@ -12,6 +13,7 @@ import {
   sendNotification,
 } from "@/lib/api"
 import { toast } from "sonner"
+import { Skeleton } from "@/components/skeleton"
 import {
   Dialog,
   DialogContent,
@@ -33,15 +35,15 @@ const isDurationValid = (start: string, end: string) => {
   return diff >= min && diff <= max
 }
 
+type WindowsResponse = Awaited<ReturnType<typeof getFOMOWindows>>
+
 export default function FOMOWindowsPage() {
-  const [windows, setWindows] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [activeWindow, setActiveWindow] = useState<any | null>(null)
   const [analytics, setAnalytics] = useState<any | null>(null)
-  const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -50,15 +52,81 @@ export default function FOMOWindowsPage() {
     maxPostsPerUser: "",
   })
 
-  const loadWindows = () =>
-    getFOMOWindows()
-      .then(setWindows)
-      .catch((error) => toast.error(error.message || "Failed to load windows"))
-      .finally(() => setLoading(false))
+  const windowsQuery = useQuery<WindowsResponse>({
+    queryKey: ["fomo-windows"],
+    queryFn: getFOMOWindows,
+  })
 
-  useEffect(() => {
-    loadWindows()
-  }, [])
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      await createFOMOWindow({
+        title: form.title.trim(),
+        description: form.description.trim(),
+        startTime: toIsoDate(form.startDate),
+        endTime: toIsoDate(form.endDate),
+        maxPostsPerUser: form.maxPostsPerUser ? Number(form.maxPostsPerUser) : null,
+      })
+      await sendNotification({
+        title: "New FOMO window",
+        content: `A new FOMO window is open from ${form.startDate} to ${form.endDate}`,
+        targetGroup: "all",
+      })
+    },
+    onSuccess: () => {
+      toast.success("FOMO window created")
+      resetForm()
+      setCreateOpen(false)
+      queryClient.invalidateQueries({ queryKey: ["fomo-windows"] })
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to create window"),
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await updateFOMOWindow(id, {
+        title: form.title.trim(),
+        description: form.description.trim(),
+        startTime: toIsoDate(form.startDate),
+        endTime: toIsoDate(form.endDate),
+        maxPostsPerUser: form.maxPostsPerUser ? Number(form.maxPostsPerUser) : null,
+      })
+      await sendNotification({
+        title: "FOMO window updated",
+        content: `${form.title} runs from ${form.startDate} to ${form.endDate}`,
+        targetGroup: "all",
+      })
+    },
+    onSuccess: () => {
+      toast.success("FOMO window updated")
+      setEditOpen(false)
+      setActiveWindow(null)
+      queryClient.invalidateQueries({ queryKey: ["fomo-windows"] })
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to update window"),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (windowId: string) => deleteFOMOWindow(windowId),
+    onSuccess: () => {
+      toast.success("FOMO window disabled")
+      queryClient.invalidateQueries({ queryKey: ["fomo-windows"] })
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to disable window"),
+  })
+
+  const analyticsMutation = useMutation({
+    mutationFn: (windowId: string) => getFOMOWindowAnalytics(windowId),
+    onSuccess: (response: any) => {
+      const stats = response?.data?.stats
+      if (!stats) {
+        toast.error("Analytics unavailable")
+        return
+      }
+      setAnalytics(stats)
+      setAnalyticsOpen(true)
+    },
+    onError: (error: any) => toast.error(error?.message || "Failed to fetch analytics"),
+  })
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -99,7 +167,7 @@ export default function FOMOWindowsPage() {
     setEditOpen(true)
   }
 
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!form.title.trim() || !form.startDate || !form.endDate) {
       toast.error("Title, start date, and end date are required")
       return
@@ -108,32 +176,10 @@ export default function FOMOWindowsPage() {
       toast.error("Window must be between 5 minutes and 48 hours long")
       return
     }
-
-    setSaving(true)
-    try {
-      await createFOMOWindow({
-        title: form.title.trim(),
-        description: form.description.trim(),
-        startTime: toIsoDate(form.startDate),
-        endTime: toIsoDate(form.endDate),
-        maxPostsPerUser: form.maxPostsPerUser ? Number(form.maxPostsPerUser) : null,
-      })
-      toast.success("FOMO window created")
-      await sendNotification({
-        title: "New FOMO window",
-        content: `A new FOMO window is open from ${form.startDate} to ${form.endDate}`,
-        targetGroup: "all",
-      })
-      setCreateOpen(false)
-      loadWindows()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to create window")
-    } finally {
-      setSaving(false)
-    }
+    createMutation.mutate()
   }
 
-  const handleUpdate = async () => {
+  const handleUpdate = () => {
     if (!activeWindow) return
     if (!form.title.trim() || !form.startDate || !form.endDate) {
       toast.error("Title, start date, and end date are required")
@@ -143,57 +189,20 @@ export default function FOMOWindowsPage() {
       toast.error("Window must be between 5 minutes and 48 hours long")
       return
     }
-
-    setSaving(true)
-    try {
-      await updateFOMOWindow(activeWindow.id, {
-        title: form.title.trim(),
-        description: form.description.trim(),
-        startTime: toIsoDate(form.startDate),
-        endTime: toIsoDate(form.endDate),
-        maxPostsPerUser: form.maxPostsPerUser ? Number(form.maxPostsPerUser) : null,
-      })
-      toast.success("FOMO window updated")
-      await sendNotification({
-        title: "FOMO window updated",
-        content: `${form.title} runs from ${form.startDate} to ${form.endDate}`,
-        targetGroup: "all",
-      })
-      setEditOpen(false)
-      setActiveWindow(null)
-      loadWindows()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update window")
-    } finally {
-      setSaving(false)
-    }
+    updateMutation.mutate(activeWindow.id)
   }
 
-  const handleDelete = async (windowId: string) => {
+  const handleDelete = (windowId: string) => {
     if (!window.confirm("Disable this FOMO window?")) return
-    try {
-      await deleteFOMOWindow(windowId)
-      toast.success("FOMO window disabled")
-      loadWindows()
-    } catch (error: any) {
-      toast.error(error.message || "Failed to disable window")
-    }
+    deleteMutation.mutate(windowId)
   }
 
-  const handleAnalytics = async (windowId: string) => {
-    try {
-      const response: any = await getFOMOWindowAnalytics(windowId)
-      const stats = response?.data?.stats
-      if (!stats) {
-        toast.error("Analytics unavailable")
-        return
-      }
-      setAnalytics(stats)
-      setAnalyticsOpen(true)
-    } catch (error: any) {
-      toast.error(error.message || "Failed to fetch analytics")
-    }
+  const handleAnalytics = (windowId: string) => {
+    analyticsMutation.mutate(windowId)
   }
+
+  const windows = windowsQuery.data ?? []
+  const loading = windowsQuery.isLoading || windowsQuery.isFetching
 
   return (
     <div>
@@ -206,23 +215,33 @@ export default function FOMOWindowsPage() {
 
         <div className="grid grid-cols-1 gap-4">
           {loading ? (
-            <div className="text-sm text-muted-foreground">Loading windows...</div>
+            Array.from({ length: 3 }).map((_, idx) => (
+              <div key={idx} className="rounded-lg border border-border bg-white p-6">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="mt-2 h-4 w-56" />
+                <div className="mt-4 grid grid-cols-3 gap-4">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </div>
+              </div>
+            ))
           ) : windows.length === 0 ? (
             <div className="text-sm text-muted-foreground">No FOMO windows found.</div>
           ) : (
             windows.map((fomoWindow: any) => (
               <div
                 key={fomoWindow.id}
-                className="bg-white rounded-lg border border-border p-6 hover:shadow-md transition-shadow"
+                className="rounded-lg border border-border bg-white p-6 transition-shadow hover:shadow-md"
               >
-                <div className="flex items-start justify-between mb-4">
+                <div className="mb-4 flex items-start justify-between">
                   <div>
                     <h3 className="text-lg font-bold text-foreground">{fomoWindow.name}</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
+                    <p className="mt-1 text-sm text-muted-foreground">
                       {fomoWindow.startDate} to {fomoWindow.endDate}
                     </p>
                   </div>
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(fomoWindow.status)}`}>
+                  <span className={`rounded-full px-3 py-1 text-xs font-medium ${getStatusColor(fomoWindow.status)}`}>
                     {fomoWindow.status.charAt(0).toUpperCase() + fomoWindow.status.slice(1)}
                   </span>
                 </div>
@@ -242,14 +261,14 @@ export default function FOMOWindowsPage() {
                   </div>
                 </div>
 
-                <div className="flex gap-2 mt-4">
+                <div className="mt-4 flex gap-2">
                   <Button variant="outline" size="sm" onClick={() => openEdit(fomoWindow)}>
                     Edit
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleAnalytics(fomoWindow.id)}>
+                  <Button variant="outline" size="sm" onClick={() => handleAnalytics(fomoWindow.id)} disabled={analyticsMutation.isPending}>
                     Analytics
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleDelete(fomoWindow.id)}>
+                  <Button variant="outline" size="sm" onClick={() => handleDelete(fomoWindow.id)} disabled={deleteMutation.isPending}>
                     Delete
                   </Button>
                 </div>
@@ -267,47 +286,47 @@ export default function FOMOWindowsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Title</label>
+              <label className="mb-2 block text-sm font-medium text-foreground">Title</label>
               <input
-                className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                 value={form.title}
                 onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))}
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Description</label>
+              <label className="mb-2 block text-sm font-medium text-foreground">Description</label>
               <textarea
-                className="w-full px-4 py-2 border border-border rounded-lg text-sm min-h-24"
+                className="min-h-24 w-full rounded-lg border border-border px-4 py-2 text-sm"
                 value={form.description}
                 onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">Start Date</label>
+                <label className="mb-2 block text-sm font-medium text-foreground">Start Date</label>
                 <input
                   type="date"
-                  className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                  className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                   value={form.startDate}
                   onChange={(event) => setForm((prev) => ({ ...prev, startDate: event.target.value }))}
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">End Date</label>
+                <label className="mb-2 block text-sm font-medium text-foreground">End Date</label>
                 <input
                   type="date"
-                  className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                  className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                   value={form.endDate}
                   onChange={(event) => setForm((prev) => ({ ...prev, endDate: event.target.value }))}
                 />
               </div>
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Max posts per user (0 = unlimited)</label>
+              <label className="mb-2 block text-sm font-medium text-foreground">Max posts per user (0 = unlimited)</label>
               <input
                 type="number"
                 min={0}
-                className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                 value={form.maxPostsPerUser}
                 onChange={(event) => setForm((prev) => ({ ...prev, maxPostsPerUser: event.target.value }))}
               />
@@ -317,8 +336,8 @@ export default function FOMOWindowsPage() {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={saving}>
-              {saving ? "Creating..." : "Create Window"}
+            <Button onClick={handleCreate} disabled={createMutation.isPending}>
+              {createMutation.isPending ? "Creating..." : "Create Window"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -338,47 +357,47 @@ export default function FOMOWindowsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Title</label>
+              <label className="mb-2 block text-sm font-medium text-foreground">Title</label>
               <input
-                className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                 value={form.title}
                 onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))}
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Description</label>
+              <label className="mb-2 block text-sm font-medium text-foreground">Description</label>
               <textarea
-                className="w-full px-4 py-2 border border-border rounded-lg text-sm min-h-24"
+                className="min-h-24 w-full rounded-lg border border-border px-4 py-2 text-sm"
                 value={form.description}
                 onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">Start Date</label>
+                <label className="mb-2 block text-sm font-medium text-foreground">Start Date</label>
                 <input
                   type="date"
-                  className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                  className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                   value={form.startDate}
                   onChange={(event) => setForm((prev) => ({ ...prev, startDate: event.target.value }))}
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">End Date</label>
+                <label className="mb-2 block text-sm font-medium text-foreground">End Date</label>
                 <input
                   type="date"
-                  className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                  className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                   value={form.endDate}
                   onChange={(event) => setForm((prev) => ({ ...prev, endDate: event.target.value }))}
                 />
               </div>
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Max posts per user (0 = unlimited)</label>
+              <label className="mb-2 block text-sm font-medium text-foreground">Max posts per user (0 = unlimited)</label>
               <input
                 type="number"
                 min={0}
-                className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                className="w-full rounded-lg border border-border px-4 py-2 text-sm"
                 value={form.maxPostsPerUser}
                 onChange={(event) => setForm((prev) => ({ ...prev, maxPostsPerUser: event.target.value }))}
               />
@@ -388,8 +407,8 @@ export default function FOMOWindowsPage() {
             <Button variant="outline" onClick={() => setEditOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleUpdate} disabled={saving}>
-              {saving ? "Saving..." : "Save Changes"}
+            <Button onClick={handleUpdate} disabled={updateMutation.isPending}>
+              {updateMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -415,7 +434,7 @@ export default function FOMOWindowsPage() {
               </div>
               {analytics.postsByDay && analytics.postsByDay.length > 0 ? (
                 <div>
-                  <p className="text-muted-foreground mb-2">Posts by Day</p>
+                  <p className="mb-2 text-muted-foreground">Posts by Day</p>
                   <div className="space-y-2">
                     {analytics.postsByDay.map((item: any) => (
                       <div key={item.date} className="flex items-center justify-between text-foreground">
@@ -430,7 +449,9 @@ export default function FOMOWindowsPage() {
               )}
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground">Loading analytics...</div>
+            <div className="text-sm text-muted-foreground">
+              {analyticsMutation.isPending ? "Loading analytics..." : "Select a window to view analytics."}
+            </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setAnalyticsOpen(false)}>

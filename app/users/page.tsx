@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,17 +18,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+type UsersResponse = Awaited<ReturnType<typeof getUsers>>
+
 export default function UsersPage() {
-  const [users, setUsers] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
-  const [total, setTotal] = useState(0)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [selectedUser, setSelectedUser] = useState<any | null>(null)
-  const [selectedUserProfile, setSelectedUserProfile] = useState<any | null>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
-  const [actionLoading, setActionLoading] = useState(false)
 
   const pageSize = 10
 
@@ -35,20 +33,45 @@ export default function UsersPage() {
     setPage(1)
   }, [searchTerm, statusFilter])
 
-  useEffect(() => {
-    setLoading(true)
-    getUsers(page, pageSize, searchTerm, statusFilter)
-      .then((data) => {
-        setUsers(data.users)
-        setTotal(data.total)
-      })
-      .catch((error) => {
-        toast.error(error.message || "Failed to load users")
-      })
-      .finally(() => setLoading(false))
-  }, [page, searchTerm, statusFilter])
+  const usersQuery = useQuery<UsersResponse>({
+    queryKey: ["users", { page, pageSize, searchTerm, statusFilter }],
+    queryFn: () => getUsers(page, pageSize, searchTerm, statusFilter),
+    keepPreviousData: true,
+  })
 
+  const users = usersQuery.data?.users ?? []
+  const total = usersQuery.data?.total ?? 0
   const totalPages = Math.ceil(total / pageSize)
+
+  const profileQuery = useQuery({
+    queryKey: ["user-profile", selectedUser?.id],
+    queryFn: () => getUserProfile(selectedUser?.id || ""),
+    enabled: !!selectedUser,
+  })
+
+  const detailLoading = profileQuery.isLoading || profileQuery.isFetching
+  const selectedUserProfile = profileQuery.data || selectedUser
+
+  const statusMutation = useMutation({
+    mutationFn: ({ userId, action }: { userId: string; action: string }) =>
+      updateUserStatus(userId, { action }),
+    onSuccess: (_, variables) => {
+      toast.success("User updated")
+      queryClient.invalidateQueries({ queryKey: ["users"] })
+      queryClient.invalidateQueries({ queryKey: ["user-profile", variables.userId] })
+      setSelectedUser((prev) =>
+        prev && prev.id === variables.userId
+          ? {
+              ...prev,
+              verified: variables.action === "verify" ? true : variables.action === "unverify" ? false : prev.verified,
+            }
+          : prev
+      )
+    },
+    onError: (error: any) => {
+      toast.error(error?.message || "Failed to update user")
+    },
+  })
 
   const handleExport = () => {
     const csv = [
@@ -75,22 +98,13 @@ export default function UsersPage() {
     toast.success("Users exported successfully")
   }
 
-  const openManageUser = async (user: any) => {
+  const openManageUser = (user: any) => {
     setSelectedUser(user)
-    setDetailLoading(true)
-    try {
-      const profile = await getUserProfile(user.id)
-      setSelectedUserProfile(profile)
-    } catch (error: any) {
-      toast.error(error.message || "Failed to load user details")
-    } finally {
-      setDetailLoading(false)
-    }
   }
 
   const handleCloseDialog = () => {
     setSelectedUser(null)
-    setSelectedUserProfile(null)
+    queryClient.removeQueries({ queryKey: ["user-profile"] })
   }
 
   const applyStatusLocally = (action: string) => {
@@ -101,17 +115,22 @@ export default function UsersPage() {
       return current
     }
 
-    setUsers((prev) =>
-      prev.map((user) =>
-        user.id === selectedUser?.id
-          ? {
-              ...user,
-              status: deriveStatus(user.status),
-              verified: action === "verify" ? true : action === "unverify" ? false : user.verified,
-            }
-          : user
-      )
-    )
+    queryClient.setQueriesData<UsersResponse>({ queryKey: ["users"] }, (existing) => {
+      if (!existing) return existing
+      return {
+        ...existing,
+        users: existing.users.map((user) =>
+          user.id === selectedUser?.id
+            ? {
+                ...user,
+                status: deriveStatus(user.status),
+                verified: action === "verify" ? true : action === "unverify" ? false : user.verified,
+              }
+            : user
+        ),
+      }
+    })
+
     setSelectedUser((prev) =>
       prev
         ? {
@@ -121,41 +140,34 @@ export default function UsersPage() {
           }
         : prev
     )
-    setSelectedUserProfile((prev) =>
-      prev
-        ? {
-            ...prev,
-            status: deriveStatus(prev.status || "active"),
-            verified: action === "verify" ? true : action === "unverify" ? false : prev.verified,
-          }
-        : prev
+  }
+
+  const handleUserAction = (action: string) => {
+    if (!selectedUser) return
+    statusMutation.mutate(
+      { userId: selectedUser.id, action },
+      {
+        onSuccess: () => applyStatusLocally(action),
+      }
     )
   }
 
-  const handleUserAction = async (action: string) => {
-    if (!selectedUser) return
-    setActionLoading(true)
-    try {
-      await updateUserStatus(selectedUser.id, { action })
-      applyStatusLocally(action)
-      toast.success("User updated")
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update user")
-    } finally {
-      setActionLoading(false)
-    }
-  }
+  const paginationLabel = useMemo(
+    () =>
+      `Showing ${Math.min((page - 1) * pageSize + 1, total)} to ${Math.min(page * pageSize, total)} of ${total} users`,
+    [page, pageSize, total]
+  )
 
   return (
     <div>
       <Header title="User Management" description="Manage and view all platform users" />
 
       <div className="p-8 space-y-6">
-        <div className="flex gap-4 items-end">
+        <div className="flex items-end gap-4">
           <div className="flex-1">
-            <label className="text-sm font-medium text-foreground mb-2 block">Search Users</label>
+            <label className="mb-2 block text-sm font-medium text-foreground">Search Users</label>
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Search by username or email..."
                 value={searchTerm}
@@ -165,11 +177,11 @@ export default function UsersPage() {
             </div>
           </div>
           <div>
-            <label className="text-sm font-medium text-foreground mb-2 block">Status</label>
+            <label className="mb-2 block text-sm font-medium text-foreground">Status</label>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-4 py-2 border border-border rounded-lg text-sm"
+              className="rounded-lg border border-border px-4 py-2 text-sm"
             >
               <option value="all">All Status</option>
               <option value="active">Active</option>
@@ -178,15 +190,15 @@ export default function UsersPage() {
             </select>
           </div>
           <Button onClick={handleExport} variant="outline" size="sm">
-            <Download className="w-4 h-4 mr-2" />
+            <Download className="mr-2 h-4 w-4" />
             Export
           </Button>
         </div>
 
-        <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <div className="overflow-hidden rounded-lg border border-border bg-white">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-secondary/50 border-b border-border">
+              <thead className="border-b border-border bg-secondary/50">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Username</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Email</th>
@@ -203,21 +215,27 @@ export default function UsersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading ? (
+                {usersQuery.isLoading ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-6">
+                    <td colSpan={12} className="px-6 py-6">
                       <TableSkeleton />
+                    </td>
+                  </tr>
+                ) : users.length === 0 ? (
+                  <tr>
+                    <td colSpan={12} className="px-6 py-6 text-sm text-muted-foreground">
+                      No users found.
                     </td>
                   </tr>
                 ) : (
                   users.map((user: any) => (
-                    <tr key={user.id} className="hover:bg-secondary/30 transition-colors">
+                    <tr key={user.id} className="transition-colors hover:bg-secondary/30">
                       <td className="px-6 py-4 text-sm font-medium text-foreground">{user.username}</td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">{user.email}</td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">{user.phoneNumber || "-"}</td>
                       <td className="px-6 py-4 text-sm">
                         <span
-                          className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          className={`rounded-full px-3 py-1 text-xs font-medium ${
                             user.status === "active"
                               ? "bg-green-100 text-green-700"
                               : user.status === "inactive"
@@ -249,9 +267,7 @@ export default function UsersPage() {
         </div>
 
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            Showing {Math.min((page - 1) * pageSize + 1, total)} to {Math.min(page * pageSize, total)} of {total} users
-          </p>
+          <p className="text-sm text-muted-foreground">{paginationLabel}</p>
           <div className="flex gap-2">
             <Button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -259,7 +275,7 @@ export default function UsersPage() {
               variant="outline"
               size="sm"
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ChevronLeft className="h-4 w-4" />
             </Button>
             {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
               const pageNum = page > 3 ? page + i - 2 : i + 1
@@ -280,7 +296,7 @@ export default function UsersPage() {
               variant="outline"
               size="sm"
             >
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -299,35 +315,35 @@ export default function UsersPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-muted-foreground">Username</p>
-                  <p className="font-medium text-foreground">{(selectedUserProfile || selectedUser).username}</p>
+                  <p className="font-medium text-foreground">{selectedUserProfile?.username}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Email</p>
-                  <p className="font-medium text-foreground">{(selectedUserProfile || selectedUser).email}</p>
+                  <p className="font-medium text-foreground">{selectedUserProfile?.email}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Phone</p>
-                  <p className="font-medium text-foreground">{(selectedUserProfile || selectedUser).phoneNumber || "-"}</p>
+                  <p className="font-medium text-foreground">{selectedUserProfile?.phoneNumber || "-"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Status</p>
-                  <p className="font-medium text-foreground">{selectedUser.status}</p>
+                  <p className="font-medium text-foreground">{selectedUserProfile?.status}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Verified</p>
-                  <p className="font-medium text-foreground">{selectedUser.verified ? "Yes" : "No"}</p>
+                  <p className="font-medium text-foreground">{selectedUserProfile?.verified ? "Yes" : "No"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Ghost Name</p>
-                  <p className="font-medium text-foreground">{(selectedUserProfile || selectedUser).anonymousId || "-"}</p>
+                  <p className="font-medium text-foreground">{selectedUserProfile?.anonymousId || "-"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">School</p>
-                  <p className="font-medium text-foreground">{(selectedUserProfile || selectedUser).education || "-"}</p>
+                  <p className="font-medium text-foreground">{selectedUserProfile?.education || "-"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Work</p>
-                  <p className="font-medium text-foreground">{(selectedUserProfile || selectedUser).work || "-"}</p>
+                  <p className="font-medium text-foreground">{selectedUserProfile?.work || "-"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Posts</p>
@@ -343,25 +359,25 @@ export default function UsersPage() {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <Button size="sm" onClick={() => handleUserAction(selectedUser.verified ? "unverify" : "verify")} disabled={actionLoading}>
+                <Button size="sm" onClick={() => handleUserAction(selectedUser.verified ? "unverify" : "verify")} disabled={statusMutation.isPending}>
                   {selectedUser.verified ? "Remove verification" : "Verify user"}
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => handleUserAction("ban")} disabled={actionLoading}>
+                <Button size="sm" variant="outline" onClick={() => handleUserAction("ban")} disabled={statusMutation.isPending}>
                   Ban account
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => handleUserAction("unban")} disabled={actionLoading}>
+                <Button size="sm" variant="outline" onClick={() => handleUserAction("unban")} disabled={statusMutation.isPending}>
                   Lift ban
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => handleUserAction("restrict")} disabled={actionLoading}>
+                <Button size="sm" variant="outline" onClick={() => handleUserAction("restrict")} disabled={statusMutation.isPending}>
                   Restrict account
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => handleUserAction("unrestrict")} disabled={actionLoading}>
+                <Button size="sm" variant="outline" onClick={() => handleUserAction("unrestrict")} disabled={statusMutation.isPending}>
                   Lift restriction
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => handleUserAction("suspend")} disabled={actionLoading}>
+                <Button size="sm" variant="outline" onClick={() => handleUserAction("suspend")} disabled={statusMutation.isPending}>
                   Suspend
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => handleUserAction("unsuspend")} disabled={actionLoading}>
+                <Button size="sm" variant="outline" onClick={() => handleUserAction("unsuspend")} disabled={statusMutation.isPending}>
                   Resume
                 </Button>
               </div>

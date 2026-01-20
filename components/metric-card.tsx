@@ -1,8 +1,9 @@
+import type React from "react"
 import { TrendingUp, TrendingDown } from "lucide-react"
 
 interface MetricCardProps {
   label: string
-  value: string
+  value: React.ReactNode
   icon: string
   trend: string
   trendUp: boolean

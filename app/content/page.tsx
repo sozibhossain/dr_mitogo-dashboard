@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { TableSkeleton } from "@/components/skeleton"
@@ -16,11 +17,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+type FlagsResponse = Awaited<ReturnType<typeof getContentFlags>>
+
 export default function ContentPage() {
-  const [flags, setFlags] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
-  const [total, setTotal] = useState(0)
   const [statusFilter, setStatusFilter] = useState("all")
   const [selectedFlag, setSelectedFlag] = useState<any | null>(null)
 
@@ -30,31 +31,41 @@ export default function ContentPage() {
     setPage(1)
   }, [statusFilter])
 
-  useEffect(() => {
-    setLoading(true)
-    getContentFlags(page, pageSize, statusFilter)
-      .then((data) => {
-        setFlags(data.flags)
-        setTotal(data.total)
-      })
-      .catch((error) => toast.error(error.message || "Failed to load moderation queue"))
-      .finally(() => setLoading(false))
-  }, [page, statusFilter])
+  const flagsQuery = useQuery<FlagsResponse>({
+    queryKey: ["content-flags", { page, pageSize, statusFilter }],
+    queryFn: () => getContentFlags(page, pageSize, statusFilter),
+    keepPreviousData: true,
+  })
 
+  const flags = flagsQuery.data?.flags ?? []
+  const total = flagsQuery.data?.total ?? 0
   const totalPages = Math.ceil(total / pageSize)
 
-  const handleReview = async (flagId: string, action: "approve" | "hide") => {
-    try {
-      await reviewContent(flagId, action)
-      toast.success(`Content ${action === "approve" ? "approved" : "hidden"} successfully`)
-      setFlags(flags.filter((f: any) => f.id !== flagId))
-      if (selectedFlag?.id === flagId) {
+  const reviewMutation = useMutation({
+    mutationFn: ({ flagId, action }: { flagId: string; action: "approve" | "hide" }) =>
+      reviewContent(flagId, action),
+    onSuccess: (_, variables) => {
+      toast.success(`Content ${variables.action === "approve" ? "approved" : "hidden"} successfully`)
+      queryClient.setQueriesData<FlagsResponse>({ queryKey: ["content-flags"] }, (existing) => {
+        if (!existing) return existing
+        return { ...existing, flags: existing.flags.filter((f) => f.id !== variables.flagId) }
+      })
+      if (selectedFlag?.id === variables.flagId) {
         setSelectedFlag(null)
       }
-    } catch (error) {
-      toast.error("Failed to review content")
-    }
+    },
+    onError: () => toast.error("Failed to review content"),
+  })
+
+  const handleReview = (flagId: string, action: "approve" | "hide") => {
+    reviewMutation.mutate({ flagId, action })
   }
+
+  const paginationLabel = useMemo(
+    () =>
+      `Showing ${Math.min((page - 1) * pageSize + 1, total)} to ${Math.min(page * pageSize, total)} of ${total} flags`,
+    [page, pageSize, total]
+  )
 
   return (
     <div>
@@ -62,11 +73,11 @@ export default function ContentPage() {
 
       <div className="p-8 space-y-6">
         <div>
-          <label className="text-sm font-medium text-foreground mb-2 block">Filter by Status</label>
+          <label className="mb-2 block text-sm font-medium text-foreground">Filter by Status</label>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-4 py-2 border border-border rounded-lg text-sm"
+            className="rounded-lg border border-border px-4 py-2 text-sm"
           >
             <option value="all">All Status</option>
             <option value="pending">Pending</option>
@@ -75,10 +86,10 @@ export default function ContentPage() {
           </select>
         </div>
 
-        <div className="bg-white rounded-lg border border-border overflow-hidden">
+        <div className="overflow-hidden rounded-lg border border-border bg-white">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-secondary/50 border-b border-border">
+              <thead className="border-b border-border bg-secondary/50">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Post ID</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Content Preview</th>
@@ -89,7 +100,7 @@ export default function ContentPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading ? (
+                {flagsQuery.isLoading ? (
                   <tr>
                     <td colSpan={6} className="px-6 py-6">
                       <TableSkeleton />
@@ -103,7 +114,7 @@ export default function ContentPage() {
                   </tr>
                 ) : (
                   flags.map((flag: any) => (
-                    <tr key={flag.id} className="hover:bg-secondary/30 transition-colors">
+                    <tr key={flag.id} className="transition-colors hover:bg-secondary/30">
                       <td className="px-6 py-4 text-sm font-mono text-muted-foreground">{flag.postId}</td>
                       <td className="px-6 py-4 text-sm text-foreground max-w-xs truncate">{flag.content}</td>
                       <td className="px-6 py-4 text-sm text-foreground">{flag.reason}</td>
@@ -113,7 +124,7 @@ export default function ContentPage() {
                       </td>
                       <td className="px-6 py-4 text-sm">
                         <span
-                          className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          className={`rounded-full px-3 py-1 text-xs font-medium ${
                             flag.status === "pending"
                               ? "bg-yellow-100 text-yellow-700"
                               : flag.status === "reviewed"
@@ -126,23 +137,23 @@ export default function ContentPage() {
                       </td>
                       <td className="px-6 py-4 text-sm flex gap-2">
                         <Button size="sm" variant="ghost" onClick={() => setSelectedFlag(flag)}>
-                          <Eye className="w-4 h-4 mr-1" />
+                          <Eye className="mr-1 h-4 w-4" />
                           Preview
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
                           onClick={() => handleReview(flag.id, "approve")}
-                          disabled={flag.status === "reviewed"}
+                          disabled={flag.status === "reviewed" || reviewMutation.isPending}
                         >
-                          <CheckCircle className="w-4 h-4 mr-1" />
+                          <CheckCircle className="mr-1 h-4 w-4" />
                           Approve
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
                           onClick={() => handleReview(flag.id, "hide")}
-                          disabled={flag.status === "hidden"}
+                          disabled={flag.status === "hidden" || reviewMutation.isPending}
                         >
                           Hide
                         </Button>
@@ -156,9 +167,7 @@ export default function ContentPage() {
         </div>
 
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            Showing {Math.min((page - 1) * pageSize + 1, total)} to {Math.min(page * pageSize, total)} of {total} flags
-          </p>
+          <p className="text-sm text-muted-foreground">{paginationLabel}</p>
           <div className="flex gap-2">
             <Button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -166,7 +175,7 @@ export default function ContentPage() {
               variant="outline"
               size="sm"
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ChevronLeft className="h-4 w-4" />
             </Button>
             {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
               const pageNum = page > 3 ? page + i - 2 : i + 1
@@ -187,7 +196,7 @@ export default function ContentPage() {
               variant="outline"
               size="sm"
             >
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -221,8 +230,8 @@ export default function ContentPage() {
               </div>
 
               <div>
-                <p className="text-muted-foreground mb-1">Content</p>
-                <div className="p-3 border border-border rounded-md bg-secondary/30 whitespace-pre-wrap text-foreground">
+                <p className="mb-1 text-muted-foreground">Content</p>
+                <div className="whitespace-pre-wrap rounded-md border border-border bg-secondary/30 p-3 text-foreground">
                   {selectedFlag.contentFull || selectedFlag.content}
                 </div>
               </div>
@@ -232,7 +241,7 @@ export default function ContentPage() {
                   <p className="text-muted-foreground">Media</p>
                   <div className="grid grid-cols-2 gap-3">
                     {selectedFlag.media.map((item: any, idx: number) => (
-                      <div key={`${item.url}-${idx}`} className="border border-border rounded-md p-2 space-y-2">
+                      <div key={`${item.url}-${idx}`} className="space-y-2 rounded-md border border-border p-2">
                         <p className="text-xs text-muted-foreground">{item.type}</p>
                         {item.type === "image" ? (
                           // eslint-disable-next-line @next/next/no-img-element
@@ -261,14 +270,14 @@ export default function ContentPage() {
               <>
                 <Button
                   onClick={() => handleReview(selectedFlag.id, "approve")}
-                  disabled={selectedFlag.status === "reviewed"}
+                  disabled={selectedFlag.status === "reviewed" || reviewMutation.isPending}
                 >
                   Approve
                 </Button>
                 <Button
                   variant="outline"
                   onClick={() => handleReview(selectedFlag.id, "hide")}
-                  disabled={selectedFlag.status === "hidden"}
+                  disabled={selectedFlag.status === "hidden" || reviewMutation.isPending}
                 >
                   Hide
                 </Button>
