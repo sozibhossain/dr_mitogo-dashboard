@@ -62,10 +62,13 @@ export interface ContentFlag {
   id: string;
   postId: string;
   content: string;
+  contentFull?: string;
+  media?: Array<{ type: string; url: string; thumbnailUrl?: string }>;
   reason: string;
   flaggedAt: string;
   status: "pending" | "reviewed" | "hidden";
   author: string;
+  authorFlaggedCount?: number;
 }
 
 export interface AICampaign {
@@ -81,10 +84,13 @@ export interface AICampaign {
 export interface SupportTicket {
   id: string;
   subject: string;
+  description?: string;
+  attachments?: string[];
   user: string;
   status: string;
   priority: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface VerificationRequest {
@@ -99,10 +105,26 @@ export interface VerificationRequest {
 export interface AdCampaign {
   id: string;
   name: string;
+  contentType: "text" | "image" | "video" | "audio";
+  contentText?: string;
+  mediaUrl?: string;
+  linkUrl?: string;
+  placement?: string;
   impressions: number;
   clicks: number;
   ctr: number;
   spend: number;
+  status: string;
+  startTime?: string;
+  endTime?: string;
+  metrics?: {
+    views: number;
+    likes: number;
+    comments: number;
+    shares: number;
+    reports: number;
+    reposts: number;
+  };
 }
 
 export interface DashboardSummary {
@@ -189,6 +211,8 @@ export interface AdSummary {
   totalClicks: number;
   avgCtr: number;
   totalSpend: number;
+  totalViews?: number;
+  totalReports?: number;
 }
 
 export interface SecuritySummary {
@@ -559,6 +583,7 @@ export async function createFOMOWindow(payload: {
   description?: string;
   startTime: string;
   endTime: string;
+  maxPostsPerUser?: number | null;
 }) {
   return apiRequest("/fomo/admin/windows", {
     method: "POST",
@@ -568,7 +593,7 @@ export async function createFOMOWindow(payload: {
 
 export async function updateFOMOWindow(
   id: string,
-  payload: { title?: string; description?: string; startTime?: string; endTime?: string }
+  payload: { title?: string; description?: string; startTime?: string; endTime?: string; maxPostsPerUser?: number | null }
 ) {
   return apiRequest(`/fomo/admin/windows/${id}`, {
     method: "PATCH",
@@ -601,8 +626,11 @@ export async function getContentFlags(page = 1, limit = 10, status?: string) {
       id: string;
       postId: string;
       contentPreview: string;
+      contentFull?: string;
+      media?: Array<{ type: string; url: string; thumbnailUrl?: string }>;
       reason: string;
       author: { username?: string; displayName?: string } | null;
+      authorFlaggedCount?: number;
       status: string;
       displayStatus?: string;
       createdAt: string;
@@ -615,10 +643,13 @@ export async function getContentFlags(page = 1, limit = 10, status?: string) {
       id: flag.id,
       postId: flag.postId,
       content: flag.contentPreview,
+      contentFull: flag.contentFull || flag.contentPreview,
+      media: flag.media || [],
       reason: flag.reason,
       flaggedAt: new Date(flag.createdAt).toISOString().split("T")[0],
       status: (flag.displayStatus || flag.status || "pending") as ContentFlag["status"],
       author: flag.author?.username || flag.author?.displayName || "-",
+      authorFlaggedCount: flag.authorFlaggedCount || 0,
     })),
     total: response.pagination.total,
     page: response.pagination.page,
@@ -719,6 +750,10 @@ export async function getVerificationRequests(status?: string) {
       displayName: string;
       createdAt: string;
       status: string;
+      id_front?: string;
+      id_back?: string;
+      selfie?: string;
+      reason?: string;
     }>;
   }>(`/verification/admin/requests?${params.toString()}`);
 
@@ -729,6 +764,12 @@ export async function getVerificationRequests(status?: string) {
     type: "Verification Badge",
     submittedAt: new Date(request.createdAt).toISOString().split("T")[0],
     status: request.status,
+    documents: {
+      id_front: request.id_front,
+      id_back: request.id_back,
+      selfie: request.selfie,
+    },
+    reason: request.reason,
   }));
 }
 
@@ -757,13 +798,24 @@ export async function getAdSummary(): Promise<AdSummary> {
 
 export async function getAdCampaigns(): Promise<AdCampaign[]> {
   const response = await apiRequest<{ data: AdCampaign[] }>("/ads/campaigns");
-  return response.data;
+  return response.data.map((campaign) => ({
+    ...campaign,
+    startTime: campaign.startTime ? new Date(campaign.startTime).toISOString() : undefined,
+    endTime: campaign.endTime ? new Date(campaign.endTime).toISOString() : undefined,
+  }));
 }
 
 export async function createAdCampaign(payload: {
   name: string;
-  impressions?: number;
-  clicks?: number;
+  contentType: AdCampaign["contentType"];
+  contentText?: string;
+  mediaUrl?: string;
+  linkUrl?: string;
+  startTime?: string;
+  endTime?: string;
+  placement?: string;
+  allowedUserIds?: string[];
+  allowedGroupIds?: string[];
   spend?: number;
 }) {
   return apiRequest("/ads/campaigns", {
@@ -772,9 +824,37 @@ export async function createAdCampaign(payload: {
   });
 }
 
+export async function updateAdCampaignStatus(id: string, status: string) {
+  return apiRequest(`/ads/campaigns/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function deleteAdCampaign(id: string) {
+  return apiRequest(`/ads/campaigns/${id}`, { method: "DELETE" });
+}
+
 export async function getSecuritySummary(): Promise<SecuritySummary> {
   const response = await apiRequest<{ data: SecuritySummary }>(
     "/security/summary"
   );
+  return response.data;
+}
+
+export async function getVerificationRequestDetails(id: string) {
+  const response = await apiRequest<{ data: {
+    id: string;
+    avatar?: string;
+    email: string;
+    displayName: string;
+    id_front?: string;
+    id_back?: string;
+    selfie?: string;
+    status: string;
+    reason?: string;
+    createdAt: string;
+    updatedAt: string;
+  } }>(`/verification/admin/requests/${id}`);
   return response.data;
 }

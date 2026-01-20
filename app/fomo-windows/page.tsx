@@ -47,6 +47,7 @@ export default function FOMOWindowsPage() {
     description: "",
     startDate: "",
     endDate: "",
+    maxPostsPerUser: "",
   })
 
   const loadWindows = () =>
@@ -78,6 +79,7 @@ export default function FOMOWindowsPage() {
       description: "",
       startDate: "",
       endDate: "",
+      maxPostsPerUser: "",
     })
 
   const openCreate = () => {
@@ -92,6 +94,7 @@ export default function FOMOWindowsPage() {
       description: fomoWindow.description || "",
       startDate: fomoWindow.startDate || "",
       endDate: fomoWindow.endDate || "",
+      maxPostsPerUser: fomoWindow.maxPostsPerUser?.toString() || "",
     })
     setEditOpen(true)
   }
@@ -113,12 +116,13 @@ export default function FOMOWindowsPage() {
         description: form.description.trim(),
         startTime: toIsoDate(form.startDate),
         endTime: toIsoDate(form.endDate),
+        maxPostsPerUser: form.maxPostsPerUser ? Number(form.maxPostsPerUser) : null,
       })
       toast.success("FOMO window created")
       await sendNotification({
         title: "New FOMO window",
         content: `A new FOMO window is open from ${form.startDate} to ${form.endDate}`,
-        targetType: "all",
+        targetGroup: "all",
       })
       setCreateOpen(false)
       loadWindows()
@@ -147,12 +151,13 @@ export default function FOMOWindowsPage() {
         description: form.description.trim(),
         startTime: toIsoDate(form.startDate),
         endTime: toIsoDate(form.endDate),
+        maxPostsPerUser: form.maxPostsPerUser ? Number(form.maxPostsPerUser) : null,
       })
       toast.success("FOMO window updated")
       await sendNotification({
         title: "FOMO window updated",
         content: `${form.title} runs from ${form.startDate} to ${form.endDate}`,
-        targetType: "all",
+        targetGroup: "all",
       })
       setEditOpen(false)
       setActiveWindow(null)
@@ -222,7 +227,7 @@ export default function FOMOWindowsPage() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-3 gap-4">
                   <div>
                     <p className="text-sm text-muted-foreground">Posts Created</p>
                     <p className="text-2xl font-bold text-primary">{fomoWindow.postsCreated.toLocaleString()}</p>
@@ -230,6 +235,10 @@ export default function FOMOWindowsPage() {
                   <div>
                     <p className="text-sm text-muted-foreground">Users Participated</p>
                     <p className="text-2xl font-bold text-primary">{fomoWindow.usersParticipated.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Max posts/user</p>
+                    <p className="text-2xl font-bold text-primary">{fomoWindow.maxPostsPerUser ?? "-"}</p>
                   </div>
                 </div>
 
@@ -293,6 +302,16 @@ export default function FOMOWindowsPage() {
                 />
               </div>
             </div>
+            <div>
+              <label className="text-sm font-medium text-foreground mb-2 block">Max posts per user (0 = unlimited)</label>
+              <input
+                type="number"
+                min={0}
+                className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                value={form.maxPostsPerUser}
+                onChange={(event) => setForm((prev) => ({ ...prev, maxPostsPerUser: event.target.value }))}
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
@@ -305,10 +324,13 @@ export default function FOMOWindowsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editOpen} onOpenChange={(open) => {
-        setEditOpen(open)
-        if (!open) setActiveWindow(null)
-      }}>
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          setEditOpen(open)
+          if (!open) setActiveWindow(null)
+        }}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit FOMO Window</DialogTitle>
@@ -350,6 +372,16 @@ export default function FOMOWindowsPage() {
                   onChange={(event) => setForm((prev) => ({ ...prev, endDate: event.target.value }))}
                 />
               </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-foreground mb-2 block">Max posts per user (0 = unlimited)</label>
+              <input
+                type="number"
+                min={0}
+                className="w-full px-4 py-2 border border-border rounded-lg text-sm"
+                value={form.maxPostsPerUser}
+                onChange={(event) => setForm((prev) => ({ ...prev, maxPostsPerUser: event.target.value }))}
+              />
             </div>
           </div>
           <DialogFooter>

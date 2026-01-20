@@ -3,14 +3,29 @@
 import { useEffect, useState } from "react"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
-import { getVerificationRequests, getVerificationStats, updateVerificationRequest } from "@/lib/api"
+import {
+  getVerificationRequests,
+  getVerificationStats,
+  updateVerificationRequest,
+  getVerificationRequestDetails,
+} from "@/lib/api"
 import { toast } from "sonner"
 import { CheckCircle, XCircle } from "lucide-react"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 export default function VerificationPage() {
   const [requests, setRequests] = useState<any[]>([])
   const [stats, setStats] = useState({ pending: 0, approved30d: 0, rejected30d: 0 })
   const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState<any | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
   const loadRequests = async () => {
     setLoading(true)
@@ -34,6 +49,7 @@ export default function VerificationPage() {
       await updateVerificationRequest({ id, status: "approved" })
       toast.success("Verification approved")
       await loadRequests()
+      setSelected(null)
     } catch (error: any) {
       toast.error(error.message || "Failed to approve verification")
     }
@@ -50,6 +66,7 @@ export default function VerificationPage() {
       await updateVerificationRequest({ id, status: "rejected", reason: reason.trim() })
       toast.success("Verification rejected")
       await loadRequests()
+      setSelected(null)
     } catch (error: any) {
       toast.error(error.message || "Failed to reject verification")
     }
@@ -58,6 +75,21 @@ export default function VerificationPage() {
   const statusLabel = (status: string) => {
     if (!status) return "Pending"
     return status.charAt(0).toUpperCase() + status.slice(1)
+  }
+
+  const openDetails = async (request: any) => {
+    setSelected(request)
+    if (!request.documents?.id_front && !request.documents?.id_back && !request.documents?.selfie) {
+      setDetailLoading(true)
+      try {
+        const details = await getVerificationRequestDetails(request.id)
+        setSelected({ ...request, documents: { id_front: details.id_front, id_back: details.id_back, selfie: details.selfie } })
+      } catch (error: any) {
+        toast.error(error.message || "Failed to load documents")
+      } finally {
+        setDetailLoading(false)
+      }
+    }
   }
 
   return (
@@ -102,6 +134,9 @@ export default function VerificationPage() {
                     </div>
                   </div>
                   <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => openDetails(request)}>
+                      View
+                    </Button>
                     <Button
                       size="sm"
                       onClick={() => handleApprove(request.id)}
@@ -127,6 +162,88 @@ export default function VerificationPage() {
           )}
         </div>
       </div>
+
+      <Dialog open={!!selected} onOpenChange={(open) => (open ? null : setSelected(null))}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Verification Documents</DialogTitle>
+            <DialogDescription>Review submitted evidence before approval.</DialogDescription>
+          </DialogHeader>
+          {selected ? (
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-muted-foreground">Name</p>
+                  <p className="font-medium text-foreground">{selected.displayName}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Email</p>
+                  <p className="font-medium text-foreground">{selected.email}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Submitted</p>
+                  <p className="font-medium text-foreground">{selected.submittedAt}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Status</p>
+                  <p className="font-medium text-foreground">{statusLabel(selected.status)}</p>
+                </div>
+              </div>
+
+              {detailLoading ? (
+                <p className="text-muted-foreground">Loading documents...</p>
+              ) : (
+                <div className="grid grid-cols-3 gap-3">
+                  {selected.documents?.id_front && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Front ID</p>
+                      <img src={selected.documents.id_front} alt="Front ID" className="rounded border border-border" />
+                    </div>
+                  )}
+                  {selected.documents?.id_back && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Back ID</p>
+                      <img src={selected.documents.id_back} alt="Back ID" className="rounded border border-border" />
+                    </div>
+                  )}
+                  {selected.documents?.selfie && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Selfie</p>
+                      <img src={selected.documents.selfie} alt="Selfie" className="rounded border border-border" />
+                    </div>
+                  )}
+                  {!selected.documents?.id_front && !selected.documents?.id_back && !selected.documents?.selfie ? (
+                    <p className="text-muted-foreground col-span-3">No documents attached.</p>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : null}
+          <DialogFooter className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => setSelected(null)}>
+              Close
+            </Button>
+            {selected && (
+              <>
+                <Button
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => handleApprove(selected.id)}
+                  disabled={selected.status === "approved"}
+                >
+                  Approve
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleReject(selected.id)}
+                  disabled={selected.status === "rejected"}
+                >
+                  Reject
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

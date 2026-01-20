@@ -182,7 +182,7 @@ export default function SupportPage() {
           <div className="flex gap-2">
             <Button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
+              disabled={page === 1 || totalPages === 0}
               variant="outline"
               size="sm"
             >
@@ -216,6 +216,24 @@ export default function SupportPage() {
                 <p className="text-muted-foreground">User</p>
                 <p className="font-medium text-foreground">{selectedTicket.user}</p>
               </div>
+              {selectedTicket.description ? (
+                <div>
+                  <p className="text-muted-foreground">Description</p>
+                  <p className="font-medium text-foreground whitespace-pre-wrap">{selectedTicket.description}</p>
+                </div>
+              ) : null}
+              {selectedTicket.attachments?.length ? (
+                <div className="space-y-2">
+                  <p className="text-muted-foreground">Attachments</p>
+                  <div className="space-y-1">
+                    {selectedTicket.attachments.map((file: string, idx: number) => (
+                      <a key={idx} href={file} target="_blank" rel="noreferrer" className="text-primary underline text-xs">
+                        Attachment {idx + 1}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium text-foreground mb-2 block">Status</label>

@@ -5,7 +5,7 @@ import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { TableSkeleton } from "@/components/skeleton"
-import { getGroups, getGroupDetails, updateGroup, deleteGroup, updateGroupModeration, messageGroup } from "@/lib/api"
+import { getGroups, getGroupDetails, updateGroup, deleteGroup } from "@/lib/api"
 import { ChevronLeft, ChevronRight, Search } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -34,11 +34,7 @@ export default function GroupsPage() {
     description: "",
     visibility: "public",
     isVerified: false,
-    moderationStatus: "active",
-    moderationMode: "full",
   })
-  const [adminMessage, setAdminMessage] = useState("")
-  const [sendingMessage, setSendingMessage] = useState(false)
 
   const pageSize = 10
 
@@ -71,8 +67,6 @@ export default function GroupsPage() {
         description: group.description || "",
         visibility: group.visibility || "public",
         isVerified: !!group.isVerified,
-        moderationStatus: group.moderationStatus || "active",
-        moderationMode: group.moderationMode || "full",
       })
     } catch (error: any) {
       toast.error(error.message || "Failed to load group details")
@@ -86,7 +80,6 @@ export default function GroupsPage() {
     setManageOpen(false)
     setSelectedGroupId(null)
     setDetail(null)
-    setAdminMessage("")
   }
 
   const handleSave = async () => {
@@ -102,11 +95,6 @@ export default function GroupsPage() {
         description: form.description,
         visibility: form.visibility,
         isVerified: form.isVerified,
-      })
-      await updateGroupModeration(selectedGroupId, {
-        status: form.moderationStatus as any,
-        mode: form.moderationMode as any,
-        note: form.description,
       })
       toast.success("Group updated")
       await getGroups(page, pageSize, searchTerm).then((data) => {
@@ -140,23 +128,6 @@ export default function GroupsPage() {
     }
   }
 
-  const handleSendMessage = async () => {
-    if (!selectedGroupId || !adminMessage.trim()) {
-      toast.error("Message cannot be empty")
-      return
-    }
-    setSendingMessage(true)
-    try {
-      await messageGroup(selectedGroupId, adminMessage.trim())
-      toast.success("Message sent to group")
-      setAdminMessage("")
-    } catch (error: any) {
-      toast.error(error.message || "Failed to send message")
-    } finally {
-      setSendingMessage(false)
-    }
-  }
-
   return (
     <div>
       <Header title="Group Management" description="Manage groups and communities" />
@@ -187,8 +158,6 @@ export default function GroupsPage() {
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Members</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Posts</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Verified</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Status</th>
-                  <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Mode</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Created</th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Actions</th>
                 </tr>
@@ -214,8 +183,6 @@ export default function GroupsPage() {
                       <td className="px-6 py-4 text-sm text-foreground">{group.members.toLocaleString()}</td>
                       <td className="px-6 py-4 text-sm text-foreground">{group.posts.toLocaleString()}</td>
                       <td className="px-6 py-4 text-sm">{group.verified ? "Yes" : "-"}</td>
-                      <td className="px-6 py-4 text-sm capitalize">{group.moderationStatus || "active"}</td>
-                      <td className="px-6 py-4 text-sm capitalize">{group.moderationMode || "full"}</td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">{group.createdAt}</td>
                       <td className="px-6 py-4 text-sm">
                         <Button size="sm" variant="ghost" onClick={() => openManage(group.id)}>
@@ -339,41 +306,6 @@ export default function GroupsPage() {
                     <option value="no">No</option>
                   </select>
                 </div>
-                <div>
-                  <label className="text-sm font-medium text-foreground mb-2 block">Status</label>
-                  <select
-                    value={form.moderationStatus}
-                    onChange={(event) => setForm((prev) => ({ ...prev, moderationStatus: event.target.value }))}
-                    className="w-full px-4 py-2 border border-border rounded-lg text-sm"
-                  >
-                    <option value="active">Active</option>
-                    <option value="restricted">Restricted</option>
-                    <option value="suspended">Suspended</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-foreground mb-2 block">Functionality</label>
-                  <select
-                    value={form.moderationMode}
-                    onChange={(event) => setForm((prev) => ({ ...prev, moderationMode: event.target.value }))}
-                    className="w-full px-4 py-2 border border-border rounded-lg text-sm"
-                  >
-                    <option value="full">Full functionality</option>
-                    <option value="chat_only">Chat only</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">Admin message to group</label>
-                <textarea
-                  value={adminMessage}
-                  onChange={(event) => setAdminMessage(event.target.value)}
-                  placeholder="Drop a note for the entire group..."
-                  className="w-full px-4 py-2 border border-border rounded-lg text-sm min-h-20"
-                />
-                <Button className="mt-2" variant="outline" size="sm" onClick={handleSendMessage} disabled={sendingMessage}>
-                  {sendingMessage ? "Sending..." : "Send to group"}
-                </Button>
               </div>
             </div>
           ) : (
