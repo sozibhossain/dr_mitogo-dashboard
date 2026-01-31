@@ -11,6 +11,8 @@
   let loading = $state(false);
   let ghostPostsEnabled = $state(true);
   let defaultDuration = $state('24');
+  let editingGhostId = $state<string | null>(null);
+  let ghostNameDraft = $state('');
 
   onMount(async () => {
     loading = true;
@@ -22,6 +24,29 @@
   function handleToggleGhostPosts() {
     ghostPostsEnabled = !ghostPostsEnabled;
     toast.success(`Ghost Posts ${ghostPostsEnabled ? 'enabled' : 'disabled'}`);
+  }
+
+  function startRename(ghostName: GhostName) {
+    editingGhostId = ghostName.id;
+    ghostNameDraft = ghostName.name;
+  }
+
+  function cancelRename() {
+    editingGhostId = null;
+    ghostNameDraft = '';
+  }
+
+  function saveRename(id: string) {
+    const trimmed = ghostNameDraft.trim();
+    if (!trimmed) {
+      toast.error('Ghost name cannot be empty');
+      return;
+    }
+    ghostNames = ghostNames.map((ghostName: GhostName) =>
+      ghostName.id === id ? { ...ghostName, name: trimmed } : ghostName
+    );
+    toast.success(`Ghost name updated to ${trimmed}`);
+    cancelRename();
   }
 </script>
 
@@ -125,6 +150,7 @@
               <th class="px-6 py-3 text-left font-semibold">Status</th>
               <th class="px-6 py-3 text-left font-semibold">Usage Count</th>
               <th class="px-6 py-3 text-left font-semibold">Last Used</th>
+              <th class="px-6 py-3 text-left font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border">
@@ -135,12 +161,22 @@
                   <td class="px-6 py-4"><Skeleton className="h-4 w-16" /></td>
                   <td class="px-6 py-4"><Skeleton className="h-4 w-12" /></td>
                   <td class="px-6 py-4"><Skeleton className="h-4 w-20" /></td>
+                  <td class="px-6 py-4"><Skeleton className="h-4 w-16" /></td>
                 </tr>
               {/each}
             {:else if ghostNames.length > 0}
               {#each ghostNames as ghostName (ghostName.id)}
                 <tr class="bg-white hover:bg-gray-50">
-                  <td class="px-6 py-4 font-medium text-foreground">{ghostName.name}</td>
+                  <td class="px-6 py-4 font-medium text-foreground">
+                    {#if editingGhostId === ghostName.id}
+                      <input
+                        class="w-full px-2 py-1 border border-border rounded-md text-sm"
+                        bind:value={ghostNameDraft}
+                      />
+                    {:else}
+                      {ghostName.name}
+                    {/if}
+                  </td>
                   <td class="px-6 py-4">
                     <span class={`px-2 py-1 rounded-full text-xs font-medium ${
                       ghostName.status === 'allowed' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
@@ -150,6 +186,31 @@
                   </td>
                   <td class="px-6 py-4 text-muted-foreground">{ghostName.usageCount}</td>
                   <td class="px-6 py-4 text-muted-foreground">{ghostName.lastUsed}</td>
+                  <td class="px-6 py-4">
+                    {#if editingGhostId === ghostName.id}
+                      <div class="flex gap-3">
+                        <button
+                          class="text-green-600 hover:underline text-xs font-medium"
+                          onclick={() => saveRename(ghostName.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          class="text-muted-foreground hover:underline text-xs font-medium"
+                          onclick={cancelRename}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    {:else}
+                      <button
+                        class="text-blue-600 hover:underline text-xs font-medium"
+                        onclick={() => startRename(ghostName)}
+                      >
+                        Rename
+                      </button>
+                    {/if}
+                  </td>
                 </tr>
               {/each}
             {/if}
